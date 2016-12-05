@@ -12,6 +12,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 public class StateObject {
   // Client  socket.
@@ -56,7 +57,7 @@ public class AsynchronousSocketListener {
     sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('Krosser22@random.com', 'Krosser22', 'MIAU')";
     command = new SQLiteCommand(sql, dbConnection);
     command.ExecuteNonQuery();
-    sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('Charmander@random.com', 'Charmander', 'RAWR')";
+    sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('Charmander@random.com', '1', '1')";
     command = new SQLiteCommand(sql, dbConnection);
     command.ExecuteNonQuery();
 
@@ -154,7 +155,7 @@ public class AsynchronousSocketListener {
     try {
       listener.Bind(localEndPoint);
       listener.Listen(100);
-
+      
       Console.WriteLine("Server Ready\n");
       while (true) {
         // Set the event to nonsignaled state.
@@ -172,6 +173,18 @@ public class AsynchronousSocketListener {
 
     Console.WriteLine("\nPress ENTER to continue...");
     Console.Read();
+
+    //Conect
+    UdpClient client = new UdpClient(port);
+    //UdpClient client = new UdpClient("clientIP", port);
+
+    //Receive
+    IPEndPoint ep = null;
+    byte[] data = client.Receive(ref ep);
+
+    //Send
+    client.Send(data, data.Length);
+    client.Send(data, data.Length, ep);
   }
 
   public static void AcceptCallback(IAsyncResult ar) {
@@ -286,8 +299,85 @@ public class AsynchronousSocketListener {
     }
   }
 
+  class UDPServer {
+    public class UdpState {
+      public IPEndPoint e;
+      public UdpClient u;
+    }
+
+    public static int port = 2055;
+    public static bool messageReceived = false;
+
+    public static void ReceiveCallback (IAsyncResult ar) {
+      UdpState s = (UdpState)(ar.AsyncState);
+      UdpClient u = s.u;
+      IPEndPoint e = s.e;
+
+      Byte[] receiveBytes = u.EndReceive(ar, ref e);
+      string receiveString = Encoding.ASCII.GetString(receiveBytes);
+
+      Console.WriteLine("Received: {0}", receiveString);
+      // The message then needs to be handled
+      messageReceived = true;
+    }
+
+    public static void ReceiveMessages () {
+      // Receive a message and write it to the console.
+      IPEndPoint e = new IPEndPoint(IPAddress.Any, port);
+      UdpClient u = new UdpClient(e);
+
+      UdpState s = new UdpState();
+      s.e = e;
+      s.u = u;
+
+      Console.WriteLine("listening for messages");
+      u.BeginReceive(new AsyncCallback(ReceiveCallback), s);
+
+      // Do some work while we wait for a message.
+      while (!messageReceived) {
+        // Do something
+      }
+    }
+
+    public static bool messageSent = false;
+
+    public static void SendCallback (IAsyncResult ar) {
+      UdpClient u = (UdpClient)ar.AsyncState;
+      Console.WriteLine("number of bytes sent: {0}", u.EndSend(ar));
+      messageSent = true;
+    }
+
+    static void SendMessage (string server, string message) {
+      // create the udp socket
+      UdpClient u = new UdpClient();
+      u.Connect(server, port);
+      Byte[] sendBytes = Encoding.ASCII.GetBytes(message);
+      
+      // send the message the destination is defined by the call to .Connect()
+      u.BeginSend(sendBytes, sendBytes.Length, new AsyncCallback(SendCallback), u);
+      
+      // Do some work while we wait for the send to complete. For this example, we'll just sleep
+      while (!messageSent) {
+        Thread.Sleep(100);
+      }
+    }
+
+    public static void UPDMain () {
+      UdpClient udpc = new UdpClient(port);
+      Console.WriteLine("Server started, servicing on port " + port);
+      IPEndPoint ep = null;
+      while (true) {
+        byte[] rdata = udpc.Receive(ref ep);
+        string sdata = Encoding.ASCII.GetString(rdata);
+        // Handle the data
+        Console.WriteLine(sdata);
+      }
+    }
+  }
+
   public static int Main(String[] args) {
     StartSQLite();
+    new Task(UDPServer.UPDMain).Start();
     StartListening();
     return 0;
   }
