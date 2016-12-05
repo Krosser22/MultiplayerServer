@@ -34,38 +34,53 @@ public class AsynchronousSocketListener {
   // Holds our connection with the database
   public static SQLiteConnection dbConnection;
 
-  public static void StartSQLite() {
+  public static void CreateSQLiteBD() {
+    Console.Write("Creating BD... ");
     // Creates an empty database file
     SQLiteConnection.CreateFile("DB.sqlite");
 
     // Creates a connection with our database file.
     dbConnection = new SQLiteConnection("Data Source=DB.sqlite;Version=3;");
     dbConnection.Open();
-    
+
     // Creates a table
-    string sql = "create table Users (Nick varchar(20), Password varchar(20))";
+    string sql = "CREATE TABLE Users (Nick TEXT UNIQUE, Password TEXT, Email TEXT UNIQUE, PRIMARY KEY(Email));";
     SQLiteCommand command = new SQLiteCommand(sql, dbConnection);
     command.ExecuteNonQuery();
 
     // Inserts some values in the highscores table.
     // As you can see, there is quite some duplicate code here, we'll solve this in part two.
-    sql = "insert into Users (Nick, Password) values ('Admin', 'Password')";
+    sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('admin@random.com', 'Admin', 'Password')";
     command = new SQLiteCommand(sql, dbConnection);
     command.ExecuteNonQuery();
-    sql = "insert into Users (Nick, Password) values ('Krosser22', 'MIAU')";
+    sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('Krosser22@random.com', 'Krosser22', 'MIAU')";
     command = new SQLiteCommand(sql, dbConnection);
     command.ExecuteNonQuery();
-    sql = "insert into Users (Nick, Password) values ('Charmander', 'RAWR')";
+    sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('Charmander@random.com', 'Charmander', 'RAWR')";
     command = new SQLiteCommand(sql, dbConnection);
     command.ExecuteNonQuery();
 
+    Console.WriteLine("Done\n");
+  }
+
+  public static void StartSQLite() {
+    if (!System.IO.File.Exists("DB.sqlite")) {
+      CreateSQLiteBD();
+    } else {
+      // Creates a connection with our database file.
+      Console.Write("Connecting to the BD... ");
+      dbConnection = new SQLiteConnection("Data Source=DB.sqlite;Version=3;");
+      dbConnection.Open();
+      Console.WriteLine("Done\n");
+    }
+
     // Writes the highscores to the console sorted on score in descending order.
-    sql = "select * from Users order by Nick asc";
-    command = new SQLiteCommand(sql, dbConnection);
+    string sql = "SELECT * FROM Users ORDER BY Nick ASC";
+    SQLiteCommand command = new SQLiteCommand(sql, dbConnection);
     SQLiteDataReader reader = command.ExecuteReader();
-    /*while (reader.Read()) {
-      Console.WriteLine("Nick: " + reader["Nick"] + "\nPassword: " + reader["Password"] + "\n");
-    }*/
+    while (reader.Read()) {
+      Console.WriteLine("      Email: " + reader["Email"] + "\n      Nick: " + reader["Nick"] + "\n      Password: " + reader["Password"] + "\n");
+    }
     //Console.ReadLine();
   }
 
@@ -76,7 +91,40 @@ public class AsynchronousSocketListener {
     SQLiteDataReader reader = command.ExecuteReader();
     if (reader.Read()) {
       if (reader.GetBoolean(0)) {
-        response = "EXIST";
+        response = "DONE";
+      } else {
+        response = "ERROR";
+      }
+    }
+    return response;
+  }
+
+  private static String ProcessCreateAccount (String email, String nick, String password) {
+    String response = String.Empty;
+    string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Email = '" + email + "' OR Nick = '" + nick + "')";
+    SQLiteCommand command = new SQLiteCommand(sql, dbConnection);
+    SQLiteDataReader reader = command.ExecuteReader();
+    if (reader.Read()) {
+      if (reader.GetBoolean(0)) {
+        response = "ERROR";
+      } else {
+        sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('" + email + "', '" + nick + "', '" + password + "')";
+        command = new SQLiteCommand(sql, dbConnection);
+        command.ExecuteNonQuery();
+        response = "DONE";
+      }
+    }
+    return response;
+  }
+
+  private static String ProcessForgotPassword (String email) {
+    String response = String.Empty;
+    string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Email = '" + email + "')";
+    SQLiteCommand command = new SQLiteCommand(sql, dbConnection);
+    SQLiteDataReader reader = command.ExecuteReader();
+    if (reader.Read()) {
+      if (reader.GetBoolean(0)) {
+        response = "DONE";
       } else {
         response = "ERROR";
       }
@@ -97,7 +145,7 @@ public class AsynchronousSocketListener {
     IPAddress ipAddress = IPAddress.Parse("127.0.0.1");
     int port = 8080;
     IPEndPoint localEndPoint = new IPEndPoint(ipAddress, port);
-    Console.WriteLine("{0}:{1} ONLINE", ipAddress, port);
+    Console.WriteLine("{0}:{1} ONLINE\n", ipAddress, port);
 
     // Create a TCP/IP socket.
     Socket listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -107,7 +155,7 @@ public class AsynchronousSocketListener {
       listener.Bind(localEndPoint);
       listener.Listen(100);
 
-      Console.WriteLine("Waiting for a connection...\n");
+      Console.WriteLine("Server Ready\n");
       while (true) {
         // Set the event to nonsignaled state.
         allDone.Reset();
@@ -159,7 +207,8 @@ public class AsynchronousSocketListener {
         //Send(handler, content);
         ProcessNewData(handler, content);
       } else {
-        Console.WriteLine("ERROR: ReadCallback() > Read 0 bytes");
+        //Console.WriteLine("ERROR: ReadCallback() > Read 0 bytes");
+        handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
       }
     } catch (Exception e) {
       //Console.WriteLine(e.ToString());
@@ -170,17 +219,35 @@ public class AsynchronousSocketListener {
   
   private static void ProcessNewData(Socket handler, String content) {
     String response = String.Empty;
-    int posDelimitator = content.IndexOf(":");
-    if (posDelimitator <= 0) {
-      response = "ERROR: ':'";
+    String[] data = content.Split(':');
+    if (data.Length <= 0) {
+      response = "ERROR";
+      Console.WriteLine("ERROR: " + content);
     } else {
-      String command = content.Substring(0, posDelimitator);
-      switch (command) {
+      switch (data[0]) {
         case "Login":
-          String nick = content.Substring(posDelimitator + 1);
-          String password = nick.Substring(nick.IndexOf(':') + 1);
-          nick = nick.Substring(0, nick.IndexOf(':'));
-          response = ProcessLogin(nick, password);
+          if (data.Length == 3) {
+            response = ProcessLogin(data[1], data[2]);
+          } else {
+            response = "ERROR";
+            Console.WriteLine("ERROR: " + content);
+          }
+          break;
+        case "Create":
+          if (data.Length == 4) {
+            response = ProcessCreateAccount(data[1], data[2], data[3]);
+          } else {
+            response = "ERROR";
+            Console.WriteLine("ERROR: " + content);
+          }
+          break;
+        case "Forgot":
+          if (data.Length == 2) {
+            response = ProcessForgotPassword(data[1]);
+          } else {
+            response = "ERROR";
+            Console.WriteLine("ERROR: " + content);
+          }
           break;
         default:
           response = "ERROR COMMAND NOT FOUND";
@@ -208,8 +275,12 @@ public class AsynchronousSocketListener {
       int bytesSent = handler.EndSend(ar);
       //Console.WriteLine("Sent {0} bytes to client.\n", bytesSent);
 
-      handler.Shutdown(SocketShutdown.Send);
-      handler.Close();
+      // Create the state object.
+      StateObject state = new StateObject();
+      state.workSocket = handler;
+      handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
+      //handler.Shutdown(SocketShutdown.Send);
+      //handler.Close();
     } catch (Exception e) {
       Console.WriteLine(e.ToString());
     }
