@@ -371,6 +371,7 @@ public class AsynchronousSocketListener {
         string sdata = Encoding.ASCII.GetString(rdata);
         // Handle the data
         Console.WriteLine(sdata);
+        SendMessage(ep.Address.ToString(), sdata);
       }
     }
   }
