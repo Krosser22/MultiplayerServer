@@ -94,9 +94,16 @@ public class AsynchronousSocketListener {
   public static void ConnectNewPlayer (Socket socket, string newPlayerID) {
     string data = "AddPlayer:";
     data += newPlayerID;
+
     Parallel.ForEach(conectedList, keyValuePair => {
       if (keyValuePair.Value.workSocket != socket) {
+        //Send the info of the new player to all the conected players
         Send(keyValuePair.Value.workSocket, data);
+
+        //Send the info of the players conected to the new player
+        data = "AddPlayer:";
+        data += keyValuePair.Key;
+        Send(socket, data);
       }
     });
   }
@@ -303,7 +310,7 @@ public class AsynchronousSocketListener {
     byte[] byteData = Encoding.ASCII.GetBytes(data);
 
     // Begin sending the data to the remote device.
-    Console.WriteLine("[Server]: {0}", data);
+    //Console.WriteLine("[Server]: {0}", data);
     handler.BeginSend(byteData, 0, byteData.Length, 0, new AsyncCallback(SendCallback), handler);
   }
 
@@ -355,7 +362,7 @@ public class AsynchronousSocketListener {
       Byte[] receiveBytes = u.EndReceive(ar, ref e);
       string receiveString = Encoding.ASCII.GetString(receiveBytes);
 
-      Console.WriteLine("Received: {0}", receiveString);
+      //Console.WriteLine("Received: {0}", receiveString);
       // The message then needs to be handled
       messageReceived = true;
     }
@@ -380,7 +387,7 @@ public class AsynchronousSocketListener {
 
     public static void SendCallback (IAsyncResult ar) {
       UdpClient u = (UdpClient)ar.AsyncState;
-      Console.WriteLine("number of bytes sent: {0}", u.EndSend(ar));
+      //Console.WriteLine("number of bytes sent: {0}", u.EndSend(ar));
       messageSent = true;
     }
 
@@ -411,7 +418,7 @@ public class AsynchronousSocketListener {
         string sdata = Encoding.ASCII.GetString(rdata);
         
         // Handle the data
-        Console.WriteLine("New UPD msg: {0}", sdata);
+        //Console.WriteLine("New UPD msg: {0}", sdata);
         ProcessUDPMsg(sdata);
         //SendMessage(ep.ToString(), sdata);
       }
@@ -423,7 +430,8 @@ public class AsynchronousSocketListener {
       IPEndPoint ep = null;
 
       Socket s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-      IPAddress broadcast = IPAddress.Parse("127.255.255.255");
+      IPAddress broadcast = IPAddress.Parse("127.0.0.255");
+      s.EnableBroadcast = true;
       IPEndPoint epBroadcast = new IPEndPoint(broadcast, port);
       while (true) {
         byte[] rdata = udpc.Receive(ref ep);
