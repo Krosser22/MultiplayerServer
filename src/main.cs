@@ -7,6 +7,8 @@
 **/
 
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Data.SQLite;
 using System.Net;
 using System.Net.Sockets;
@@ -34,6 +36,10 @@ public class AsynchronousSocketListener {
 
   // Holds our connection with the database
   public static SQLiteConnection dbConnection;
+
+  public static ConcurrentDictionary<int, StateObject> conectedList = new ConcurrentDictionary<int, StateObject>();
+  
+  public static int nextID = 0;
 
   public static void CreateSQLiteBD() {
     Console.Write("Creating BD... ");
@@ -85,14 +91,31 @@ public class AsynchronousSocketListener {
     //Console.ReadLine();
   }
 
-  private static String ProcessLogin (String nick, String password) {
+  public static void ConnectNewPlayer (Socket socket, string newPlayerID) {
+    string data = "AddPlayer:";
+    data += newPlayerID;
+    Parallel.ForEach(conectedList, keyValuePair => {
+      if (keyValuePair.Value.workSocket != socket) {
+        Send(keyValuePair.Value.workSocket, data);
+      }
+    });
+  }
+
+  private static String ProcessLogin (String nick, String password, Socket socket) {
     String response = String.Empty;
     string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Nick = '" + nick + "' AND Password = '" + password + "')";
     SQLiteCommand command = new SQLiteCommand(sql, dbConnection);
     SQLiteDataReader reader = command.ExecuteReader();
     if (reader.Read()) {
       if (reader.GetBoolean(0)) {
-        response = "DONE";
+        string ID = "";
+        Parallel.ForEach(conectedList, keyValuePair => {
+          if (keyValuePair.Value.workSocket == socket) {
+            ID = keyValuePair.Key.ToString();
+          }
+        });
+        response = "Login:" + ID;
+        Task.Run(() => ConnectNewPlayer(socket, ID));
       } else {
         response = "ERROR";
       }
@@ -107,12 +130,12 @@ public class AsynchronousSocketListener {
     SQLiteDataReader reader = command.ExecuteReader();
     if (reader.Read()) {
       if (reader.GetBoolean(0)) {
-        response = "ERROR";
+        response = "Create:ERROR";
       } else {
         sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('" + email + "', '" + nick + "', '" + password + "')";
         command = new SQLiteCommand(sql, dbConnection);
         command.ExecuteNonQuery();
-        response = "DONE";
+        response = "Create:Done";
       }
     }
     return response;
@@ -125,9 +148,9 @@ public class AsynchronousSocketListener {
     SQLiteDataReader reader = command.ExecuteReader();
     if (reader.Read()) {
       if (reader.GetBoolean(0)) {
-        response = "DONE";
+        response = "Forgot:Done";
       } else {
-        response = "ERROR";
+        response = "Forgot:ERROR";
       }
     }
     return response;
@@ -155,8 +178,9 @@ public class AsynchronousSocketListener {
     try {
       listener.Bind(localEndPoint);
       listener.Listen(100);
-      
-      Console.WriteLine("Server Ready\n");
+
+      Console.WriteLine("Server Ready");
+      Console.WriteLine();
       while (true) {
         // Set the event to nonsignaled state.
         allDone.Reset();
@@ -194,10 +218,14 @@ public class AsynchronousSocketListener {
     // Get the socket that handles the client request.
     Socket listener = (Socket)ar.AsyncState;
     Socket handler = listener.EndAccept(ar);
-    Console.WriteLine("New connection: [" + handler.RemoteEndPoint + "]");
+    Console.WriteLine();
+    Console.WriteLine("New connection: [{0}]", handler.RemoteEndPoint);
 
     // Create the state object.
     StateObject state = new StateObject();
+    nextID++;
+    conectedList.TryAdd(nextID, state);
+
     state.workSocket = handler;
     handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
   }
@@ -229,21 +257,21 @@ public class AsynchronousSocketListener {
       Console.WriteLine("ERROR: Lost connection with: {0}", state.workSocket.RemoteEndPoint);
     }
   }
-  
+
   private static void ProcessNewData(Socket handler, String content) {
     String response = String.Empty;
     String[] data = content.Split(':');
     if (data.Length <= 0) {
       response = "ERROR";
-      Console.WriteLine("ERROR: " + content);
+      Console.WriteLine("ERROR: {0}", content);
     } else {
       switch (data[0]) {
         case "Login":
           if (data.Length == 3) {
-            response = ProcessLogin(data[1], data[2]);
+            response = ProcessLogin(data[1], data[2], handler);
           } else {
             response = "ERROR";
-            Console.WriteLine("ERROR: " + content);
+            Console.WriteLine("ERROR: {0}", content);
           }
           break;
         case "Create":
@@ -251,7 +279,7 @@ public class AsynchronousSocketListener {
             response = ProcessCreateAccount(data[1], data[2], data[3]);
           } else {
             response = "ERROR";
-            Console.WriteLine("ERROR: " + content);
+            Console.WriteLine("ERROR: {0}", content);
           }
           break;
         case "Forgot":
@@ -259,7 +287,7 @@ public class AsynchronousSocketListener {
             response = ProcessForgotPassword(data[1]);
           } else {
             response = "ERROR";
-            Console.WriteLine("ERROR: " + content);
+            Console.WriteLine("ERROR: {0}", content);
           }
           break;
         default:
@@ -275,7 +303,7 @@ public class AsynchronousSocketListener {
     byte[] byteData = Encoding.ASCII.GetBytes(data);
 
     // Begin sending the data to the remote device.
-    Console.WriteLine("[Server]: " + data);
+    Console.WriteLine("[Server]: {0}", data);
     handler.BeginSend(byteData, 0, byteData.Length, 0, new AsyncCallback(SendCallback), handler);
   }
 
@@ -306,7 +334,18 @@ public class AsynchronousSocketListener {
     }
 
     public static int port = 2055;
+
     public static bool messageReceived = false;
+
+    public static bool messageSent = false;
+
+    public static ConcurrentDictionary<string, IPEndPoint> UDPList = new ConcurrentDictionary<string, IPEndPoint>();
+
+    public static void ProcessUDPMsg(string data) {
+      Parallel.ForEach(UDPList, keyValuePair => {
+        SendMessage(keyValuePair.Value.ToString(), data);
+      });
+    }
 
     public static void ReceiveCallback (IAsyncResult ar) {
       UdpState s = (UdpState)(ar.AsyncState);
@@ -339,8 +378,6 @@ public class AsynchronousSocketListener {
       }
     }
 
-    public static bool messageSent = false;
-
     public static void SendCallback (IAsyncResult ar) {
       UdpClient u = (UdpClient)ar.AsyncState;
       Console.WriteLine("number of bytes sent: {0}", u.EndSend(ar));
@@ -350,7 +387,9 @@ public class AsynchronousSocketListener {
     static void SendMessage (string server, string message) {
       // create the udp socket
       UdpClient u = new UdpClient();
-      u.Connect(server, port);
+      string ip = server.Substring(0, server.IndexOf(":"));
+      int port = int.Parse(server.Substring(server.IndexOf(":") + 1));
+      u.Connect(ip, port);
       Byte[] sendBytes = Encoding.ASCII.GetBytes(message);
       
       // send the message the destination is defined by the call to .Connect()
@@ -364,18 +403,37 @@ public class AsynchronousSocketListener {
 
     public static void UPDMain () {
       UdpClient udpc = new UdpClient(port);
-      Console.WriteLine("Server started, servicing on port " + port);
+      Console.WriteLine("Server started, servicing on port {0}", port);
       IPEndPoint ep = null;
       while (true) {
         byte[] rdata = udpc.Receive(ref ep);
+        UDPList.TryAdd(ep.ToString(), ep);
         string sdata = Encoding.ASCII.GetString(rdata);
+        
         // Handle the data
-        Console.WriteLine(sdata);
-        SendMessage(ep.Address.ToString(), sdata);
+        Console.WriteLine("New UPD msg: {0}", sdata);
+        ProcessUDPMsg(sdata);
+        //SendMessage(ep.ToString(), sdata);
+      }
+    }
+
+    public static void UPDMain2 () {
+      UdpClient udpc = new UdpClient(port);
+      Console.WriteLine("Server started, servicing on port {0}", port);
+      IPEndPoint ep = null;
+
+      Socket s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+      IPAddress broadcast = IPAddress.Parse("127.255.255.255");
+      IPEndPoint epBroadcast = new IPEndPoint(broadcast, port);
+      while (true) {
+        byte[] rdata = udpc.Receive(ref ep);
+        string sdata = Encoding.ASCII.GetString(rdata);
+        s.SendTo(rdata, epBroadcast);
+        Console.WriteLine("Message sent to the broadcast address");
       }
     }
   }
-
+  
   public static int Main(String[] args) {
     StartSQLite();
     new Task(UDPServer.UPDMain).Start();
@@ -383,3 +441,4 @@ public class AsynchronousSocketListener {
     return 0;
   }
 }
+
