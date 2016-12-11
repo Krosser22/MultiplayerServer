@@ -100,6 +100,7 @@ public class AsynchronousSocketListener {
         //Send the info of the new player to all the conected players
         Send(keyValuePair.Value.workSocket, data);
 
+        Thread.Sleep(100);
         //Send the info of the players conected to the new player
         data = "AddPlayer:";
         data += keyValuePair.Key;
@@ -174,6 +175,7 @@ public class AsynchronousSocketListener {
     //IPHostEntry ipHostInfo = Dns.GetHostEntry(Dns.GetHostName());
     //IPAddress ipAddress = ipHostInfo.AddressList[0];
     IPAddress ipAddress = IPAddress.Parse("127.0.0.1");
+    //IPAddress ipAddress = IPAddress.Parse("100.76.208.8");
     int port = 8080;
     IPEndPoint localEndPoint = new IPEndPoint(ipAddress, port);
     Console.WriteLine("{0}:{1} ONLINE\n", ipAddress, port);
