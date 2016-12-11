@@ -1,4 +1,4 @@
-/**
+﻿/**
 *** ////////////////////////////////////////////
 *** /////Autor: Juan Daniel Laserna Condado/////
 *** /////Email: S6106112@live.tees.ac.uk   /////
@@ -11,7 +11,9 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data.SQLite;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -443,3 +445,47 @@ public static class Server {
 //Check if a player that connects is already connected (and then dont create a new player, just use the old one and give him all the data of the game)
 //Security: Avoid brute force --> Use minimum time to check the same user with the same IP:PORT beetwen one and another check
 //SSL/TLS --> To avoid man in the middle
+
+/*public class sslTesting {
+  // Suppose the certificate is in a file...
+  private static readonly string ServerCertificateFile = "server.pfx";
+  private static readonly string ServerCertificatePassword = null;
+
+  // later...
+  X509Certificate2 serverCertificate = new X509Certificate2(ServerCertificateFile);
+  TcpListener listener = new TcpListener(IPAddress.Any, ServerPort);
+  listener.Start();
+  while (true) {
+    using (TcpListener client = listener.AcceptTcpClient())
+    using (SslStream sslStream = new SslStream(client.GetStream(), false, App_CertificateValidation)) {
+      sslStream.AuthenticateAsServer(serverCertificate, true, SslProtocols.Tls12, false);
+      // Send/receive from the sslStream
+      // Use Read and Write
+    }
+  }
+
+
+  //Client
+  X509Certificate2 clientCertificate = new X509Certificate2 (ClientCertificateFile);
+  X509CertificateCollection clientCertificateCollection = new X509CertificateCollection(new X509Certificate[] {
+    clientCertificate
+  });
+  using (TcpClient client = new TcpClient(ServerHostName, ServerPort))
+  using (SslStream sslStream = new SslStream(client.GetStream(), false, App_CertificateValidation)) {
+    sslStream.AuthenticateAsClient(ServerCertificateName, clientCertificateCollection, SslProtocols.Tls12, false);
+    // Send/receive from the sslStream
+    // Use Read and Write
+  }
+
+  
+  //Certificate errors
+  bool App_CertificateValidation (Object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors) {
+    if (sslPolicyErrors == SslPolicyErrors.None) {
+      return true;
+    }
+    if (sslPolicyErrors == SslPolicyErrors.RemoteCertificateChainErrors) {
+      return true;
+    } //we don 't have a proper certificate tree
+    return false;
+  }
+}*/
