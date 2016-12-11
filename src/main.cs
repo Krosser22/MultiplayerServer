@@ -16,425 +16,384 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-public class StateObject {
-  // Client  socket.
-  public Socket workSocket = null;
+public static class Server {
+  //Size of receive buffer.
+  public const int kBufferSize = 1024;
 
-  // Size of receive buffer.
-  public const int BufferSize = 1024;
+  //The list of connected users
+  public static ConcurrentDictionary<int, StateObject> connectedList = new ConcurrentDictionary<int, StateObject>();
 
-  // Receive buffer.
-  public byte[] buffer = new byte[BufferSize];
+  public class StateObject {
+    //Receive buffer.
+    public byte[] buffer = new byte[kBufferSize];
 
-  // Received data string.
-  //public StringBuilder sb = new StringBuilder();
-}
+    //Client socket.
+    public Socket workSocket = null;
+  }
 
-public class AsynchronousSocketListener {
-  // Thread signal.
-  public static ManualResetEvent allDone = new ManualResetEvent(false);
+  public class DB {
+    //Holds our connection with the database
+    public static SQLiteConnection Connection;
 
-  // Holds our connection with the database
-  public static SQLiteConnection dbConnection;
+    public static void CreateDB () {
+      //Creates an empty database file
+      SQLiteConnection.CreateFile("DB.sqlite");
+      Console.WriteLine("[Created new BD]");
 
-  public static ConcurrentDictionary<int, StateObject> conectedList = new ConcurrentDictionary<int, StateObject>();
+      //Creates a connection with our database file.
+      Connection = new SQLiteConnection("Data Source=DB.sqlite;Version=3;");
+      Connection.Open();
+      Console.WriteLine("[Connected to the BD]");
+
+      //Creates the Users table
+      string sql = "CREATE TABLE Users (Nick TEXT UNIQUE, Password TEXT, Email TEXT UNIQUE, PRIMARY KEY(Email));";
+      SQLiteCommand command = new SQLiteCommand(sql, Connection);
+      command.ExecuteNonQuery();
+
+      /*sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('Krosser22@random.com', 'Krosser22', 'a123456*')";
+      command = new SQLiteCommand(sql, dbConnection);
+      command.ExecuteNonQuery();*/
+    }
+
+    public static void DBMain () {
+      if (!System.IO.File.Exists("DB.sqlite")) {
+        //Creates and connects with the DB
+        CreateDB();
+      } else {
+        //Connects to the DB
+        Connection = new SQLiteConnection("Data Source=DB.sqlite;Version=3;");
+        Connection.Open();
+        Console.WriteLine("[Connected to the BD]");
+      }
+      
+      string sql = "SELECT * FROM Users ORDER BY Nick ASC";
+      SQLiteCommand command = new SQLiteCommand(sql, Connection);
+      SQLiteDataReader reader = command.ExecuteReader();
+      while (reader.Read()) {
+        Console.WriteLine("-Email: " + reader["Email"]);
+        Console.WriteLine("-Nick: " + reader["Nick"]);
+        Console.WriteLine("-Password: " + reader["Password"]);
+        Console.WriteLine();
+      }
+    }
+  }
   
-  public static int nextID = 0;
+  public class TCPServer {
+    //Thread signal.
+    private static ManualResetEvent allDone = new ManualResetEvent(false);
 
-  public static void CreateSQLiteBD() {
-    Console.Write("Creating BD... ");
-    // Creates an empty database file
-    SQLiteConnection.CreateFile("DB.sqlite");
+    //The next ID of the connected users
+    private static int nextID = 0;
 
-    // Creates a connection with our database file.
-    dbConnection = new SQLiteConnection("Data Source=DB.sqlite;Version=3;");
-    dbConnection.Open();
-
-    // Creates a table
-    string sql = "CREATE TABLE Users (Nick TEXT UNIQUE, Password TEXT, Email TEXT UNIQUE, PRIMARY KEY(Email));";
-    SQLiteCommand command = new SQLiteCommand(sql, dbConnection);
-    command.ExecuteNonQuery();
-
-    // Inserts some values in the highscores table.
-    // As you can see, there is quite some duplicate code here, we'll solve this in part two.
-    sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('admin@random.com', 'Admin', 'Password')";
-    command = new SQLiteCommand(sql, dbConnection);
-    command.ExecuteNonQuery();
-    sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('Krosser22@random.com', 'Krosser22', 'MIAU')";
-    command = new SQLiteCommand(sql, dbConnection);
-    command.ExecuteNonQuery();
-    sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('Charmander@random.com', '1', '1')";
-    command = new SQLiteCommand(sql, dbConnection);
-    command.ExecuteNonQuery();
-
-    Console.WriteLine("Done\n");
-  }
-
-  public static void StartSQLite() {
-    if (!System.IO.File.Exists("DB.sqlite")) {
-      CreateSQLiteBD();
-    } else {
-      // Creates a connection with our database file.
-      Console.Write("Connecting to the BD... ");
-      dbConnection = new SQLiteConnection("Data Source=DB.sqlite;Version=3;");
-      dbConnection.Open();
-      Console.WriteLine("Done\n");
-    }
-
-    // Writes the highscores to the console sorted on score in descending order.
-    string sql = "SELECT * FROM Users ORDER BY Nick ASC";
-    SQLiteCommand command = new SQLiteCommand(sql, dbConnection);
-    SQLiteDataReader reader = command.ExecuteReader();
-    while (reader.Read()) {
-      Console.WriteLine("      Email: " + reader["Email"] + "\n      Nick: " + reader["Nick"] + "\n      Password: " + reader["Password"] + "\n");
-    }
-    //Console.ReadLine();
-  }
-
-  public static void ConnectNewPlayer (Socket socket, string newPlayerID) {
-    string data = "AddPlayer:";
-    data += newPlayerID;
-
-    Parallel.ForEach(conectedList, keyValuePair => {
-      if (keyValuePair.Value.workSocket != socket) {
-        //Send the info of the new player to all the conected players
-        Send(keyValuePair.Value.workSocket, data);
-
-        Thread.Sleep(100);
-        //Send the info of the players conected to the new player
-        data = "AddPlayer:";
-        data += keyValuePair.Key;
-        Send(socket, data);
+    private static string ProcessLogin (string nick, string password, Socket socket) {
+      string response = "Login:ERROR\n";
+      //string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Nick = '" + nick + "' AND Password = '" + password + "')";
+      string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Nick = @nick AND Password = @password)";
+      SQLiteCommand command = new SQLiteCommand(sql, DB.Connection);
+      command.Parameters.AddWithValue("@nick", nick);
+      command.Parameters.AddWithValue("@password", password);
+      SQLiteDataReader reader = command.ExecuteReader();
+      if (reader.Read()) {
+        if (reader.GetBoolean(0)) {
+          string ID = "";
+          Parallel.ForEach(connectedList, keyValuePair => {
+            if (keyValuePair.Value.workSocket == socket) {
+              ID = keyValuePair.Key.ToString();
+            }
+          });
+          response = "Login:" + ID + "\n";
+          Task.Run(() => ConnectNewPlayer(socket, ID));
+        }
       }
-    });
-  }
+      return response;
+    }
 
-  private static String ProcessLogin (String nick, String password, Socket socket) {
-    String response = String.Empty;
-    string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Nick = '" + nick + "' AND Password = '" + password + "')";
-    SQLiteCommand command = new SQLiteCommand(sql, dbConnection);
-    SQLiteDataReader reader = command.ExecuteReader();
-    if (reader.Read()) {
-      if (reader.GetBoolean(0)) {
-        string ID = "";
-        Parallel.ForEach(conectedList, keyValuePair => {
-          if (keyValuePair.Value.workSocket == socket) {
-            ID = keyValuePair.Key.ToString();
-          }
-        });
-        response = "Login:" + ID;
-        Task.Run(() => ConnectNewPlayer(socket, ID));
+    private static string ProcessCreateAccount (string email, string nick, string password) {
+      string response = "Create:ERROR\n";
+      //string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Email = '" + email + "' OR Nick = '" + nick + "')";
+      string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Email = @email OR Nick = @nick)";
+      SQLiteCommand command = new SQLiteCommand(sql, DB.Connection);
+      command.Parameters.AddWithValue("@email", email);
+      command.Parameters.AddWithValue("@nick", nick);
+      SQLiteDataReader reader = command.ExecuteReader();
+      if (reader.Read()) {
+        if (!reader.GetBoolean(0)) {
+          //sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('" + email + "', '" + nick + "', '" + password + "')";
+          sql = "INSERT INTO Users (Email, Nick, Password) VALUES (@email, @nick, @password)";
+          command = new SQLiteCommand(sql, DB.Connection);
+          command.Parameters.AddWithValue("@email", email);
+          command.Parameters.AddWithValue("@nick", nick);
+          command.Parameters.AddWithValue("@password", password);
+          command.ExecuteNonQuery();
+          response = "Create:Done\n";
+        }
+      }
+      return response;
+    }
+
+    private static string ProcessForgotPassword (string email) {
+      string response = "Forgot:ERROR\n";
+      //string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Email = '" + email + "')";
+      string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Email = @email)";
+      SQLiteCommand command = new SQLiteCommand(sql, DB.Connection);
+      command.Parameters.AddWithValue("@email", email);
+      SQLiteDataReader reader = command.ExecuteReader();
+      if (reader.Read()) {
+        if (reader.GetBoolean(0)) {
+          response += "Forgot:Done\n";
+        }
+      }
+      return response;
+    }
+
+    private static void ProcessTCPMsg(Socket handler, string content) {
+      string response = "";
+      string[] data = content.Split(':');
+      if (data.Length <= 0) {
+        response = "ERROR:BAD FORMAT";
+        Console.WriteLine("ERROR: BAD FORMAT: [{0}]", content);
       } else {
-        response = "ERROR";
+        switch (data[0]) {
+          case "Login":
+            if (data.Length == 3) {
+              response = ProcessLogin(data[1], data[2], handler);
+            } else {
+              response = "ERROR";
+              Console.WriteLine("ERROR: Login: [{0}]", content);
+            }
+            break;
+          case "Create":
+            if (data.Length == 4) {
+              response = ProcessCreateAccount(data[1], data[2], data[3]);
+            } else {
+              response = "ERROR";
+              Console.WriteLine("ERROR: Create: [{0}]", content);
+            }
+            break;
+          case "Forgot":
+            if (data.Length == 2) {
+              response = ProcessForgotPassword(data[1]);
+            } else {
+              response = "ERROR";
+              Console.WriteLine("ERROR: Forgot: [{0}]", content);
+            }
+            break;
+          default:
+            response = "ERROR COMMAND NOT FOUND";
+            Console.WriteLine("ERROR: Command not found: [{0}]", content);
+            break;
+        }
       }
-    }
-    return response;
-  }
-
-  private static String ProcessCreateAccount (String email, String nick, String password) {
-    String response = String.Empty;
-    string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Email = '" + email + "' OR Nick = '" + nick + "')";
-    SQLiteCommand command = new SQLiteCommand(sql, dbConnection);
-    SQLiteDataReader reader = command.ExecuteReader();
-    if (reader.Read()) {
-      if (reader.GetBoolean(0)) {
-        response = "Create:ERROR";
-      } else {
-        sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('" + email + "', '" + nick + "', '" + password + "')";
-        command = new SQLiteCommand(sql, dbConnection);
-        command.ExecuteNonQuery();
-        response = "Create:Done";
-      }
-    }
-    return response;
-  }
-
-  private static String ProcessForgotPassword (String email) {
-    String response = String.Empty;
-    string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Email = '" + email + "')";
-    SQLiteCommand command = new SQLiteCommand(sql, dbConnection);
-    SQLiteDataReader reader = command.ExecuteReader();
-    if (reader.Read()) {
-      if (reader.GetBoolean(0)) {
-        response = "Forgot:Done";
-      } else {
-        response = "Forgot:ERROR";
-      }
-    }
-    return response;
-  }
-
-  public AsynchronousSocketListener () {}
-
-  public static void StartListening() {
-    // Data buffer for incoming data.
-    byte[] bytes = new Byte[1024];
-
-    // Establish the local endpoint for the socket.
-    // The DNS name of the computer running the listener is "host.contoso.com".
-    //IPHostEntry ipHostInfo = Dns.GetHostEntry(Dns.GetHostName());
-    //IPAddress ipAddress = ipHostInfo.AddressList[0];
-    IPAddress ipAddress = IPAddress.Parse("127.0.0.1");
-    //IPAddress ipAddress = IPAddress.Parse("100.76.208.8");
-    int port = 8080;
-    IPEndPoint localEndPoint = new IPEndPoint(ipAddress, port);
-    Console.WriteLine("{0}:{1} ONLINE\n", ipAddress, port);
-
-    // Create a TCP/IP socket.
-    Socket listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
-    // Bind the socket to the local endpoint and listen for incoming connections.
-    try {
-      listener.Bind(localEndPoint);
-      listener.Listen(100);
-
-      Console.WriteLine("Server Ready");
-      Console.WriteLine();
-      while (true) {
-        // Set the event to nonsignaled state.
-        allDone.Reset();
-
-        // Start an asynchronous socket to listen for connections.
-        listener.BeginAccept(new AsyncCallback(AcceptCallback), listener);
-
-        // Wait until a connection is made before continuing.
-        allDone.WaitOne();
-      }
-    } catch (Exception e) {
-      Console.WriteLine(e.ToString());
+      Send(handler, response);
     }
 
-    Console.WriteLine("\nPress ENTER to continue...");
-    Console.Read();
+    private static void ConnectNewPlayer (Socket socket, string newPlayerID) {
+      string response = "";
+      Parallel.ForEach(connectedList, keyValuePair => {
+        if (keyValuePair.Value.workSocket != socket) {
+          //Send the info of the new player to all the connected players
+          response = "AddPlayer:" + newPlayerID + "\n";
+          Send(keyValuePair.Value.workSocket, response);
 
-    //Conect
-    UdpClient client = new UdpClient(port);
-    //UdpClient client = new UdpClient("clientIP", port);
-
-    //Receive
-    IPEndPoint ep = null;
-    byte[] data = client.Receive(ref ep);
-
-    //Send
-    client.Send(data, data.Length);
-    client.Send(data, data.Length, ep);
-  }
-
-  public static void AcceptCallback(IAsyncResult ar) {
-    // Signal the main thread to continue.
-    allDone.Set();
-
-    // Get the socket that handles the client request.
-    Socket listener = (Socket)ar.AsyncState;
-    Socket handler = listener.EndAccept(ar);
-    Console.WriteLine();
-    Console.WriteLine("New connection: [{0}]", handler.RemoteEndPoint);
-
-    // Create the state object.
-    StateObject state = new StateObject();
-    nextID++;
-    conectedList.TryAdd(nextID, state);
-
-    state.workSocket = handler;
-    handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
-  }
-
-  public static void ReadCallback(IAsyncResult ar) {
-    // Retrieve the state object and the handler socket from the asynchronous state object.
-    StateObject state = (StateObject)ar.AsyncState;
-
-    try {
-      Socket handler = state.workSocket;
-
-      // Read data from the client socket. 
-      int bytesRead = handler.EndReceive(ar);
-      if (bytesRead > 0) {
-        String content = Encoding.ASCII.GetString(state.buffer, 4, bytesRead);
-        content = content.Substring(0, content.IndexOf('\0'));
-        Console.WriteLine("[{0}]: {1}", state.workSocket.RemoteEndPoint, content);
-
-        // Echo the data back to the client.
-        //Send(handler, content);
-        ProcessNewData(handler, content);
-      } else {
-        //Console.WriteLine("ERROR: ReadCallback() > Read 0 bytes");
-        handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
-      }
-    } catch (Exception e) {
-      //Console.WriteLine(e.ToString());
-      e.ToString();
-      Console.WriteLine("ERROR: Lost connection with: {0}", state.workSocket.RemoteEndPoint);
+          //Send the info of the players connected to the new player
+          response = "AddPlayer:" + keyValuePair.Key + "\n";
+          Send(socket, response);
+        }
+      });
     }
-  }
 
-  private static void ProcessNewData(Socket handler, String content) {
-    String response = String.Empty;
-    String[] data = content.Split(':');
-    if (data.Length <= 0) {
-      response = "ERROR";
-      Console.WriteLine("ERROR: {0}", content);
-    } else {
-      switch (data[0]) {
-        case "Login":
-          if (data.Length == 3) {
-            response = ProcessLogin(data[1], data[2], handler);
-          } else {
-            response = "ERROR";
-            Console.WriteLine("ERROR: {0}", content);
-          }
-          break;
-        case "Create":
-          if (data.Length == 4) {
-            response = ProcessCreateAccount(data[1], data[2], data[3]);
-          } else {
-            response = "ERROR";
-            Console.WriteLine("ERROR: {0}", content);
-          }
-          break;
-        case "Forgot":
-          if (data.Length == 2) {
-            response = ProcessForgotPassword(data[1]);
-          } else {
-            response = "ERROR";
-            Console.WriteLine("ERROR: {0}", content);
-          }
-          break;
-        default:
-          response = "ERROR COMMAND NOT FOUND";
-          break;
-      }
+    private static void DisconnectPlayer (Socket socket) {
+      int key = 0;
+      StateObject state;
+      Parallel.ForEach(connectedList, keyValuePair => {
+        if (keyValuePair.Value.workSocket == socket) {
+          key = keyValuePair.Key;
+          state = keyValuePair.Value;
+        }
+      });
+      connectedList.TryRemove(key, out state);
     }
-    Send(handler, response);
-  }
 
-  private static void Send (Socket handler, String data) {
-    // Convert the string data to byte data using ASCII encoding.
-    byte[] byteData = Encoding.ASCII.GetBytes(data);
+    private static void SendCallback (IAsyncResult ar) {
+      //Create the state object.
+      StateObject state = new StateObject();
 
-    // Begin sending the data to the remote device.
-    //Console.WriteLine("[Server]: {0}", data);
-    handler.BeginSend(byteData, 0, byteData.Length, 0, new AsyncCallback(SendCallback), handler);
-  }
-
-  private static void SendCallback (IAsyncResult ar) {
-    try {
-      // Retrieve the socket from the state object.
+      //Retrieve the socket from the state object.
       Socket handler = (Socket)ar.AsyncState;
 
-      // Complete sending the data to the remote device.
-      int bytesSent = handler.EndSend(ar);
-      //Console.WriteLine("Sent {0} bytes to client.\n", bytesSent);
+      try {
+        int bytesSent = handler.EndSend(ar);
+        state.workSocket = handler;
+        handler.BeginReceive(state.buffer, 0, kBufferSize, 0, new AsyncCallback(ReadCallback), state);
+      } catch (Exception e) {
+        //Console.WriteLine(e.ToString());
+        e.ToString();
+        Console.WriteLine("ERROR1: Lost connection with: {0}", state.workSocket.RemoteEndPoint.ToString());
+        DisconnectPlayer(handler);
+      }
+    }
 
-      // Create the state object.
+    private static void Send (Socket handler, string data) {
+      //Convert the string data to byte data using ASCII encoding.
+      byte[] byteData = Encoding.ASCII.GetBytes(data);
+
+      //Begin sending the data to the remote device.
+      Console.WriteLine("[Server]: {0}", data);
+      Thread.Sleep(100);
+      handler.BeginSend(byteData, 0, byteData.Length, 0, new AsyncCallback(SendCallback), handler);
+    }
+
+    private static void ReadCallback (IAsyncResult ar) {
+      //Retrieve the state object and the handler socket from the asynchronous state object.
+      StateObject state = (StateObject)ar.AsyncState;
+
+      //Retrieve the socket from the state object.
+      Socket handler = state.workSocket;
+
+      try {
+        int bytesRead = handler.EndReceive(ar);
+        if (bytesRead > 0) {
+          //Get and clean the msg
+          string msg = Encoding.ASCII.GetString(state.buffer, 4, bytesRead);
+          msg = msg.Substring(0, msg.IndexOf('\0'));
+
+          Console.WriteLine("[{0}]: {1}", state.workSocket.RemoteEndPoint.ToString(), msg);
+          ProcessTCPMsg(handler, msg);
+        }
+      } catch (Exception e) {
+        //Console.WriteLine(e.ToString());
+        e.ToString();
+        Console.WriteLine("ERROR2: Lost connection with: {0}", state.workSocket.RemoteEndPoint.ToString());
+        DisconnectPlayer(handler);
+      }
+    }
+
+    private static void AcceptCallback (IAsyncResult ar) {
+      //Signal the main thread to continue.
+      allDone.Set();
+
+      //Get the socket that handles the client request.
+      Socket listener = (Socket)ar.AsyncState;
+      Socket handler = listener.EndAccept(ar);
+      Console.WriteLine("[New connection: {0}]", handler.RemoteEndPoint);
+
+      //Create the state object.
       StateObject state = new StateObject();
+      connectedList.TryAdd(++nextID, state);
+
       state.workSocket = handler;
-      handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
-      //handler.Shutdown(SocketShutdown.Send);
-      //handler.Close();
-    } catch (Exception e) {
-      Console.WriteLine(e.ToString());
+      handler.BeginReceive(state.buffer, 0, kBufferSize, 0, new AsyncCallback(ReadCallback), state);
+    }
+
+    public static void TCPMain () {
+      //Data buffer for incoming data.
+      byte[] bytes = new Byte[kBufferSize];
+
+      //Establish the local endpoint for the socket.
+      //The DNS name of the computer running the listener is "host.contoso.com".
+      //IPHostEntry ipHostInfo = Dns.GetHostEntry(Dns.GetHostName());
+      //IPAddress ipAddress = ipHostInfo.AddressList[0];
+      IPAddress ipAddress = IPAddress.Parse("127.0.0.1");
+      int port = 8080;
+      IPEndPoint localEndPoint = new IPEndPoint(ipAddress, port);
+
+      //Create a TCP/IP socket.
+      Socket listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+
+      //Bind the socket to the local endpoint and listen for incoming connections.
+      try {
+        listener.Bind(localEndPoint);
+        listener.Listen(100);
+        
+        Console.WriteLine("[TCP Server ready: {0}:{1}]", ipAddress, port);
+        while (true) {
+          //Set the event to nonsignaled state.
+          allDone.Reset();
+
+          //Start an asynchronous socket to listen for connections.
+          listener.BeginAccept(new AsyncCallback(AcceptCallback), listener);
+
+          //Wait until a connection is made before continuing.
+          allDone.WaitOne();
+        }
+
+        //listener.Shutdown(SocketShutdown.Send);
+        //listener.Close();
+      } catch (Exception e) {
+        Console.WriteLine(e.ToString());
+      }
     }
   }
 
-  class UDPServer {
+  public class UDPServer {
     public class UdpState {
       public IPEndPoint e;
       public UdpClient u;
     }
-
-    public static int port = 2055;
 
     public static bool messageReceived = false;
 
     public static bool messageSent = false;
 
     public static ConcurrentDictionary<string, IPEndPoint> UDPList = new ConcurrentDictionary<string, IPEndPoint>();
-
-    public static void ProcessUDPMsg(string data) {
-      Parallel.ForEach(UDPList, keyValuePair => {
-        SendMessage(keyValuePair.Value.ToString(), data);
-      });
-    }
-
-    public static void ReceiveCallback (IAsyncResult ar) {
-      UdpState s = (UdpState)(ar.AsyncState);
-      UdpClient u = s.u;
-      IPEndPoint e = s.e;
-
-      Byte[] receiveBytes = u.EndReceive(ar, ref e);
-      string receiveString = Encoding.ASCII.GetString(receiveBytes);
-
-      //Console.WriteLine("Received: {0}", receiveString);
-      // The message then needs to be handled
-      messageReceived = true;
-    }
-
-    public static void ReceiveMessages () {
-      // Receive a message and write it to the console.
-      IPEndPoint e = new IPEndPoint(IPAddress.Any, port);
-      UdpClient u = new UdpClient(e);
-
-      UdpState s = new UdpState();
-      s.e = e;
-      s.u = u;
-
-      Console.WriteLine("listening for messages");
-      u.BeginReceive(new AsyncCallback(ReceiveCallback), s);
-
-      // Do some work while we wait for a message.
-      while (!messageReceived) {
-        // Do something
-      }
-    }
-
+    
     public static void SendCallback (IAsyncResult ar) {
       UdpClient u = (UdpClient)ar.AsyncState;
-      //Console.WriteLine("number of bytes sent: {0}", u.EndSend(ar));
+      u.EndSend(ar);
       messageSent = true;
     }
 
     static void SendMessage (string server, string message) {
-      // create the udp socket
+      //Create the udp socket
       UdpClient u = new UdpClient();
       string ip = server.Substring(0, server.IndexOf(":"));
       int port = int.Parse(server.Substring(server.IndexOf(":") + 1));
       u.Connect(ip, port);
       Byte[] sendBytes = Encoding.ASCII.GetBytes(message);
-      
-      // send the message the destination is defined by the call to .Connect()
+
+      //Send the message the destination is defined by the call to .Connect()
       u.BeginSend(sendBytes, sendBytes.Length, new AsyncCallback(SendCallback), u);
-      
-      // Do some work while we wait for the send to complete. For this example, we'll just sleep
+
+      //Do some work while we wait for the send to complete. For this example, we'll just sleep
       while (!messageSent) {
         Thread.Sleep(100);
       }
     }
 
+    public static void ProcessUDPMsg (string data) {
+      Parallel.ForEach(UDPList, keyValuePair => {
+        SendMessage(keyValuePair.Value.ToString(), data);
+      });
+    }
+
     public static void UPDMain () {
-      UdpClient udpc = new UdpClient(port);
-      Console.WriteLine("Server started, servicing on port {0}", port);
+      int Port = 2055;
       IPEndPoint ep = null;
+      UdpClient udpc = new UdpClient(Port);
+      Console.WriteLine("[UDP Server ready: {0}]", Port);
+
       while (true) {
         byte[] rdata = udpc.Receive(ref ep);
-        UDPList.TryAdd(ep.ToString(), ep);
         string sdata = Encoding.ASCII.GetString(rdata);
-        
-        // Handle the data
+        UDPList.TryAdd(ep.ToString(), ep);
+
+        //Handle the data
         //Console.WriteLine("New UPD msg: {0}", sdata);
         ProcessUDPMsg(sdata);
-        //SendMessage(ep.ToString(), sdata);
       }
     }
 
     public static void UPDMain2 () {
-      UdpClient udpc = new UdpClient(port);
-      Console.WriteLine("Server started, servicing on port {0}", port);
+      int Port = 2055;
       IPEndPoint ep = null;
+      UdpClient udpc = new UdpClient(Port);
+      Console.WriteLine("[UDP Server ready: {0}]", Port);
 
       Socket s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
       IPAddress broadcast = IPAddress.Parse("127.0.0.255");
       s.EnableBroadcast = true;
-      IPEndPoint epBroadcast = new IPEndPoint(broadcast, port);
+      udpc.EnableBroadcast = true;
+      IPEndPoint epBroadcast = new IPEndPoint(broadcast, Port);
       while (true) {
         byte[] rdata = udpc.Receive(ref ep);
         string sdata = Encoding.ASCII.GetString(rdata);
@@ -442,13 +401,45 @@ public class AsynchronousSocketListener {
         Console.WriteLine("Message sent to the broadcast address");
       }
     }
+
+    public static void UPDMain3 () {
+      /*Socket s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+      s.EnableBroadcast = true;
+      //IPAddress broadcast = IPAddress.Parse("100.76.205.255");
+      //IPAddress broadcast = IPAddress.Parse("127.255.255.255");
+      IPAddress broadcast = IPAddress.Broadcast;
+      byte[] sendbuf = Encoding.ASCII.GetBytes("HOLA");
+      IPEndPoint ep = new IPEndPoint(broadcast, 2055);
+      s.SendTo(sendbuf, ep);
+      Console.WriteLine("Message sent to the broadcast address");*/
+
+      //////////////////////
+
+      UdpClient client = new UdpClient();
+      client.EnableBroadcast = true;
+      //IPEndPoint ip = new IPEndPoint(IPAddress.Parse("100.76.205.255"), 15000);
+      IPEndPoint ip = new IPEndPoint(IPAddress.Parse("127.255.255.255"), 15000);
+      //IPEndPoint ip = new IPEndPoint(IPAddress.Broadcast, 15000);
+      byte[] bytes = Encoding.ASCII.GetBytes("HOLA");
+      client.Send(bytes, bytes.Length, ip);
+    }
   }
-  
-  public static int Main(String[] args) {
-    StartSQLite();
+
+  public static int Main (string[] args) {
+    DB.DBMain();
+    new Task(TCPServer.TCPMain).Start();
     new Task(UDPServer.UPDMain).Start();
-    StartListening();
+
+    string command = "";
+    while (command != "exit") {
+      command = Console.ReadLine();
+      //if (command != "") Console.WriteLine("Command: {0}", command);
+    }
+
     return 0;
   }
 }
 
+//Check if a player that connects is already connected (and then dont create a new player, just use the old one and give him all the data of the game)
+//Security: Avoid brute force --> Use minimum time to check the same user with the same IP:PORT beetwen one and another check
+//SSL/TLS --> To avoid man in the middle
