@@ -81,13 +81,17 @@ public static class Server {
       }
     }
   }
-  
+
   public class TCPServer {
     //Thread signal.
     private static ManualResetEvent allDone = new ManualResetEvent(false);
 
     //The next ID of the connected users
     private static int nextID = 0;
+
+    //Security
+    private static RSACryptoServiceProvider rsaServer;
+    private static string publicKeyXml;
 
     private static string ProcessLogin (string nick, string password, Socket socket) {
       string response = "Login:ERROR\n";
@@ -150,7 +154,7 @@ public static class Server {
       return response;
     }
 
-    private static void ProcessTCPMsg(Socket handler, string content) {
+    private static void ProcessTCPMsg (Socket handler, string content) {
       string response = "";
       string[] data = content.Split(':');
       if (data.Length <= 0) {
@@ -284,8 +288,12 @@ public static class Server {
       //Create the state object.
       StateObject state = new StateObject();
       connectedList.TryAdd(++nextID, state);
-
       state.workSocket = handler;
+
+      //Sends the public key of the server to the client
+      Send(handler, publicKeyXml);
+
+      //Begin with the encrypted connection
       handler.BeginReceive(state.buffer, 0, kBufferSize, 0, new AsyncCallback(ReadCallback), state);
     }
 
@@ -308,8 +316,19 @@ public static class Server {
       try {
         listener.Bind(localEndPoint);
         listener.Listen(100);
-        
+
         Console.WriteLine("[TCP Server ready: {0}:{1}]", ipAddress, port);
+        
+        //Security: SSL
+        try {
+          rsaServer = new RSACryptoServiceProvider(1024);
+          publicKeyXml = rsaServer.ToXmlString(false);
+        } catch (Exception ex) {
+          Console.WriteLine("ERROR: SSL");
+          Console.WriteLine(ex.Message);
+          Console.Read();
+        }
+
         while (true) {
           //Set the event to nonsignaled state.
           allDone.Reset();
@@ -328,32 +347,39 @@ public static class Server {
       }
     }
 
-    //////////////////////
-    //////////////////////
-    /*
-    // Suppose the certificate is in a file...
-    private static readonly string ServerCertificateFile = "server.pfx";
-    private static readonly string ServerCertificatePassword = null;
-    public static void TCPMain2 () {
+    public static void SSLExample () {
+      try {
+        //Server
+        RSACryptoServiceProvider rsaServer = new RSACryptoServiceProvider(2048);
 
-      // later...
-      int ServerPort = 9999;
-      X509Certificate2 serverCertificate = new X509Certificate2(ServerCertificateFile);
-      var listener = new TcpListener(IPAddress.Any, ServerPort);
-      listener.Start();
-      while (true) {
-        using (var client = listener.AcceptTcpClient())
-        using (SslStream sslStream = new SslStream(client.GetStream(), false, App_CertificateValidation)) {
-          sslStream.AuthenticateAsServer(serverCertificate, true, SslProtocols.Tls12, false);
-          // Send/receive from the sslStream
-          // Use Read and Write
-        }
+        //Client
+        RSACryptoServiceProvider rsaClient = new RSACryptoServiceProvider(2048);
+
+        //Server sends the publicKeyXml to the client
+        string publicKeyXml = rsaServer.ToXmlString(false);
+
+        //Client receive the publicKeyXml
+        rsaClient.FromXmlString(publicKeyXml);
+
+        //Client wants to send a new msg
+        byte []data = Encoding.UTF8.GetBytes("Data To Be Encrypted");
+
+        //Client encrypts the msg with the SPK
+        byte []encryptedData = rsaClient.Encrypt(data, false);
+
+        //Encrypted msg
+        Console.WriteLine(Encoding.UTF8.GetString(encryptedData));
+
+        //Server decrpty the msg
+        byte []decryptedData = rsaServer.Decrypt(encryptedData, false);
+
+        //Decrypted msg
+        Console.WriteLine(Encoding.UTF8.GetString(decryptedData));
+      } catch (Exception ex) {
+        Console.WriteLine(ex.Message);
       }
+      Console.Read();
     }
-    */
-    //////////////////////
-    //////////////////////
-
   }
 
   public class UDPServer {
@@ -456,7 +482,8 @@ public static class Server {
     }
   }
 
-  public static int Main2 (string[] args) {
+  public static int Main (string[] args) {
+    //TCPServer.SSLExample();
     DB.DBMain();
     new Task(TCPServer.TCPMain).Start();
     new Task(UDPServer.UPDMain).Start();
@@ -475,9 +502,10 @@ public static class Server {
 //Security: Avoid brute force --> Use minimum time to check the same user with the same IP:PORT beetwen one and another check
 //SSL/TLS --> To avoid man in the middle
 
-//////////////////////
-//////////////////////
 
+
+//////////////////////
+//////////////////////
 /*public class sslTesting {
   // Suppose the certificate is in a file...
   private static readonly string ServerCertificateFile = "server.pfx";
@@ -521,15 +549,48 @@ public static class Server {
     return false;
   }
 }*/
+//////////////////////
+//////////////////////
 
-// To run this sample use the Certificate Creation Tool (Makecert.exe) to generate a test X.509 certificate and 
+
+
+//////////////////////
+//////////////////////
+/*
+// Suppose the certificate is in a file...
+private static readonly string ServerCertificateFile = "server.pfx";
+private static readonly string ServerCertificatePassword = null;
+public static void TCPMain2 () {
+
+  // later...
+  int ServerPort = 9999;
+  X509Certificate2 serverCertificate = new X509Certificate2(ServerCertificateFile);
+  var listener = new TcpListener(IPAddress.Any, ServerPort);
+  listener.Start();
+  while (true) {
+    using (var client = listener.AcceptTcpClient())
+    using (SslStream sslStream = new SslStream(client.GetStream(), false, App_CertificateValidation)) {
+      sslStream.AuthenticateAsServer(serverCertificate, true, SslProtocols.Tls12, false);
+      // Send/receive from the sslStream
+      // Use Read and Write
+    }
+  }
+}
+*/
+//////////////////////
+//////////////////////
+
+
+
+//////////////////////
+//////////////////////
+/*// To run this sample use the Certificate Creation Tool (Makecert.exe) to generate a test X.509 certificate and 
 // place it in the local user store. 
 // To generate an exchange key and make the key exportable run the following command from a Visual Studio command prompt: 
 
 //makecert -r -pe -n "CN=CERT_SIGN_TEST_CERT" -b 01/01/2010 -e 01/01/2012 -sky exchange -ss my
 namespace X509CertEncrypt {
   class Program {
-
     // Path variables for source, encryption, and
     // decryption folders. Must end with a backslash.
     private static string encrFolder = "./Encrypt/"; //@"C:\Encrypt\";
@@ -537,7 +598,7 @@ namespace X509CertEncrypt {
     private static string originalFile = "TestData.txt";
     private static string encryptedFile = "TestData.enc";
 
-    static void Main (string[] args) {
+    static void Main2 (string[] args) {
       // Create an input file with test data.
       StreamWriter sw = File.CreateText(originalFile);
       sw.WriteLine("Test data to be encrypted");
@@ -818,4 +879,6 @@ namespace X509CertEncrypt {
       }
     }
   }
-}
+}*/
+//////////////////////
+//////////////////////
