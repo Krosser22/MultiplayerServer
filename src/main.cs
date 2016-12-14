@@ -89,7 +89,7 @@ public static class Server {
     //The next ID of the connected users
     private static int nextID = 0;
 
-    //Security
+    //SSL Security
     private static RSACryptoServiceProvider rsaServer;
     private static string publicKeyXml;
 
@@ -350,31 +350,25 @@ public static class Server {
     public static void SSLExample () {
       try {
         //Server
+        //////////////////////
         RSACryptoServiceProvider rsaServer = new RSACryptoServiceProvider(2048);
+        string publicKeyXml = rsaServer.ToXmlString(false); //Sends the publicKeyXml to the client
+        //////////////////////
 
         //Client
+        //////////////////////
         RSACryptoServiceProvider rsaClient = new RSACryptoServiceProvider(2048);
-
-        //Server sends the publicKeyXml to the client
-        string publicKeyXml = rsaServer.ToXmlString(false);
-
-        //Client receive the publicKeyXml
-        rsaClient.FromXmlString(publicKeyXml);
-
-        //Client wants to send a new msg
-        byte []data = Encoding.UTF8.GetBytes("Data To Be Encrypted");
-
-        //Client encrypts the msg with the SPK
-        byte []encryptedData = rsaClient.Encrypt(data, false);
-
-        //Encrypted msg
-        Console.WriteLine(Encoding.UTF8.GetString(encryptedData));
-
-        //Server decrpty the msg
-        byte []decryptedData = rsaServer.Decrypt(encryptedData, false);
-
-        //Decrypted msg
-        Console.WriteLine(Encoding.UTF8.GetString(decryptedData));
+        rsaClient.FromXmlString(publicKeyXml); //Client receive the publicKeyXml
+        byte []data = Encoding.UTF8.GetBytes("Data To Be Encrypted"); //Client wants to send a new msg
+        byte []encryptedData = rsaClient.Encrypt(data, false); //Client encrypts the msg with the SPK
+        //////////////////////
+        
+        //Server
+        //////////////////////
+        Console.WriteLine(Encoding.UTF8.GetString(encryptedData)); //Server gets the encrypted msg
+        byte []decryptedData = rsaServer.Decrypt(encryptedData, false); //Server decrpty the msg
+        Console.WriteLine(Encoding.UTF8.GetString(decryptedData)); //Decrypted msg
+        //////////////////////
       } catch (Exception ex) {
         Console.WriteLine(ex.Message);
       }
@@ -484,6 +478,8 @@ public static class Server {
 
   public static int Main (string[] args) {
     //TCPServer.SSLExample();
+    //X509CertEncrypt.CertInfo.Main2();
+    //X509CertEncrypt.Program.Main2();
     DB.DBMain();
     new Task(TCPServer.TCPMain).Start();
     new Task(UDPServer.UPDMain).Start();
@@ -502,95 +498,17 @@ public static class Server {
 //Security: Avoid brute force --> Use minimum time to check the same user with the same IP:PORT beetwen one and another check
 //SSL/TLS --> To avoid man in the middle
 
-
-
-//////////////////////
-//////////////////////
-/*public class sslTesting {
-  // Suppose the certificate is in a file...
-  private static readonly string ServerCertificateFile = "server.pfx";
-  private static readonly string ServerCertificatePassword = null;
-
-  // later...
-  X509Certificate2 serverCertificate = new X509Certificate2(ServerCertificateFile);
-  TcpListener listener = new TcpListener(IPAddress.Any, ServerPort);
-  listener.Start();
-  while (true) {
-    using (TcpListener client = listener.AcceptTcpClient())
-    using (SslStream sslStream = new SslStream(client.GetStream(), false, App_CertificateValidation)) {
-      sslStream.AuthenticateAsServer(serverCertificate, true, SslProtocols.Tls12, false);
-      // Send/receive from the sslStream
-      // Use Read and Write
-    }
-  }
-
-
-  //Client
-  X509Certificate2 clientCertificate = new X509Certificate2 (ClientCertificateFile);
-  X509CertificateCollection clientCertificateCollection = new X509CertificateCollection(new X509Certificate[] {
-    clientCertificate
-  });
-  using (TcpClient client = new TcpClient(ServerHostName, ServerPort))
-  using (SslStream sslStream = new SslStream(client.GetStream(), false, App_CertificateValidation)) {
-    sslStream.AuthenticateAsClient(ServerCertificateName, clientCertificateCollection, SslProtocols.Tls12, false);
-    // Send/receive from the sslStream
-    // Use Read and Write
-  }
-
   
-  //Certificate errors
-  bool App_CertificateValidation (Object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors) {
-    if (sslPolicyErrors == SslPolicyErrors.None) {
-      return true;
-    }
-    if (sslPolicyErrors == SslPolicyErrors.RemoteCertificateChainErrors) {
-      return true;
-    } //we don 't have a proper certificate tree
-    return false;
-  }
-}*/
-//////////////////////
-//////////////////////
-
-
 
 //////////////////////
 //////////////////////
-/*
-// Suppose the certificate is in a file...
-private static readonly string ServerCertificateFile = "server.pfx";
-private static readonly string ServerCertificatePassword = null;
-public static void TCPMain2 () {
-
-  // later...
-  int ServerPort = 9999;
-  X509Certificate2 serverCertificate = new X509Certificate2(ServerCertificateFile);
-  var listener = new TcpListener(IPAddress.Any, ServerPort);
-  listener.Start();
-  while (true) {
-    using (var client = listener.AcceptTcpClient())
-    using (SslStream sslStream = new SslStream(client.GetStream(), false, App_CertificateValidation)) {
-      sslStream.AuthenticateAsServer(serverCertificate, true, SslProtocols.Tls12, false);
-      // Send/receive from the sslStream
-      // Use Read and Write
-    }
-  }
-}
-*/
-//////////////////////
-//////////////////////
-
-
-
-//////////////////////
-//////////////////////
-/*// To run this sample use the Certificate Creation Tool (Makecert.exe) to generate a test X.509 certificate and 
+// To run this sample use the Certificate Creation Tool (Makecert.exe) to generate a test X.509 certificate and 
 // place it in the local user store. 
 // To generate an exchange key and make the key exportable run the following command from a Visual Studio command prompt: 
 
 //makecert -r -pe -n "CN=CERT_SIGN_TEST_CERT" -b 01/01/2010 -e 01/01/2012 -sky exchange -ss my
 namespace X509CertEncrypt {
-  class Program {
+  public static class Program {
     // Path variables for source, encryption, and
     // decryption folders. Must end with a backslash.
     private static string encrFolder = "./Encrypt/"; //@"C:\Encrypt\";
@@ -598,7 +516,7 @@ namespace X509CertEncrypt {
     private static string originalFile = "TestData.txt";
     private static string encryptedFile = "TestData.enc";
 
-    static void Main2 (string[] args) {
+    public static void Main2 () {
       // Create an input file with test data.
       StreamWriter sw = File.CreateText(originalFile);
       sw.WriteLine("Test data to be encrypted");
@@ -625,7 +543,6 @@ namespace X509CertEncrypt {
     }
 
     private static X509Certificate2 GetCertificateFromStore (string certName) {
-
       // Get the certificate store for the current user.
       X509Store store = new X509Store(StoreLocation.CurrentUser);
       try {
@@ -644,11 +561,11 @@ namespace X509CertEncrypt {
       } finally {
         store.Close();
       }
-
     }
 
     // Encrypt a file using a public key.
     private static void EncryptFile (string inFile, RSACryptoServiceProvider rsaPublicKey) {
+      
       using (AesManaged aesManaged = new AesManaged()) {
         // Create instance of AesManaged for
         // symetric encryption of the data.
@@ -827,6 +744,27 @@ namespace X509CertEncrypt {
   }
 
   class CertInfo {
+    private static X509Certificate2 GetCertificateFromStore (string certName) {
+      // Get the certificate store for the current user.
+      X509Store store = new X509Store(StoreLocation.CurrentUser);
+      try {
+        store.Open(OpenFlags.ReadOnly);
+
+        // Place all certificates in an X509Certificate2Collection object.
+        X509Certificate2Collection certCollection = store.Certificates;
+        // If using a certificate with a trusted root you do not need to FindByTimeValid, instead:
+        // currentCerts.Find(X509FindType.FindBySubjectDistinguishedName, certName, true);
+        X509Certificate2Collection currentCerts = certCollection.Find(X509FindType.FindByTimeValid, DateTime.Now, false);
+        X509Certificate2Collection signingCert = currentCerts.Find(X509FindType.FindBySubjectDistinguishedName, certName, false);
+        if (signingCert.Count == 0)
+          return null;
+        // Return the first certificate in the collection, has the right name and is current.
+        return signingCert[0];
+      } finally {
+        store.Close();
+      }
+    }
+
     //Reads a file.
     internal static byte[] ReadFile (string fileName) {
       FileStream f = new FileStream(fileName, FileMode.Open, FileAccess.Read);
@@ -836,20 +774,12 @@ namespace X509CertEncrypt {
       f.Close();
       return data;
     }
+    
     //Main method begins here.
-    static void Main (string[] args) {
-      //Test for correct number of arguments.
-      if (args.Length < 1) {
-        Console.WriteLine("Usage: CertInfo <filename>");
-        return;
-      }
+    public static void Main2 () {
       try {
-        X509Certificate2 x509 = new X509Certificate2();
-        //Create X509Certificate2 object from .cer file.
-        byte[] rawData = ReadFile(args[0]);
-
-        x509.Import(rawData);
-
+        X509Certificate2 x509 = GetCertificateFromStore("CN=CERT_SIGN_TEST_CERT");
+        
         //Print to console information contained in the certificate.
         Console.WriteLine("{0}Subject: {1}{0}", Environment.NewLine, x509.Subject);
         Console.WriteLine("{0}Issuer: {1}{0}", Environment.NewLine, x509.Issuer);
@@ -879,6 +809,6 @@ namespace X509CertEncrypt {
       }
     }
   }
-}*/
+}
 //////////////////////
 //////////////////////
