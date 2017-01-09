@@ -33,6 +33,8 @@ public static class Server {
 
     //Client socket.
     public Socket workSocket = null;
+
+    public string nick = "";
   }
 
   public class DB {
@@ -103,14 +105,13 @@ public static class Server {
       SQLiteDataReader reader = command.ExecuteReader();
       if (reader.Read()) {
         if (reader.GetBoolean(0)) {
-          string ID = "";
+          response = "Login:" + nick + "\n";
           Parallel.ForEach(connectedList, keyValuePair => {
             if (keyValuePair.Value.workSocket == socket) {
-              ID = keyValuePair.Key.ToString();
+              keyValuePair.Value.nick = nick;
             }
           });
-          response = "Login:" + ID + "\n";
-          Task.Run(() => ConnectNewPlayer(socket, ID));
+          Task.Run(() => ConnectNewPlayer(socket, nick));
         }
       }
       return response;
@@ -148,10 +149,18 @@ public static class Server {
       SQLiteDataReader reader = command.ExecuteReader();
       if (reader.Read()) {
         if (reader.GetBoolean(0)) {
-          response += "Forgot:Done\n";
+          response = "Forgot:Done\n";
         }
       }
       return response;
+    }
+
+    private static void ProcessChatNewLine (string nick, string newLine) {
+      string response = "";
+      Parallel.ForEach(connectedList, keyValuePair => {
+        response = "Chat:" + nick + ":" + newLine + "\n";
+        Send(keyValuePair.Value.workSocket, response);
+      });
     }
 
     private static void ProcessTCPMsg (Socket handler, string content) {
@@ -160,6 +169,7 @@ public static class Server {
       if (data.Length <= 0) {
         response = "ERROR:BAD FORMAT";
         Console.WriteLine("ERROR: BAD FORMAT: [{0}]", content);
+        Send(handler, response);
       } else {
         switch (data[0]) {
           case "Login":
@@ -169,6 +179,7 @@ public static class Server {
               response = "ERROR";
               Console.WriteLine("ERROR: Login: [{0}]", content);
             }
+            Send(handler, response);
             break;
           case "Create":
             if (data.Length == 4) {
@@ -177,6 +188,7 @@ public static class Server {
               response = "ERROR";
               Console.WriteLine("ERROR: Create: [{0}]", content);
             }
+            Send(handler, response);
             break;
           case "Forgot":
             if (data.Length == 2) {
@@ -185,26 +197,36 @@ public static class Server {
               response = "ERROR";
               Console.WriteLine("ERROR: Forgot: [{0}]", content);
             }
+            Send(handler, response);
+            break;
+          case "Chat":
+            if (data.Length == 3) {
+              ProcessChatNewLine(data[1], data[2]);
+              response = "";
+            } else {
+              response = "ERROR";
+              Console.WriteLine("ERROR: Chat: [{0}]", content);
+            }
             break;
           default:
             response = "ERROR COMMAND NOT FOUND";
             Console.WriteLine("ERROR: Command not found: [{0}]", content);
+            Send(handler, response);
             break;
         }
       }
-      Send(handler, response);
     }
 
-    private static void ConnectNewPlayer (Socket socket, string newPlayerID) {
+    private static void ConnectNewPlayer (Socket socket, string newPlayer) {
       string response = "";
       Parallel.ForEach(connectedList, keyValuePair => {
         if (keyValuePair.Value.workSocket != socket) {
           //Send the info of the new player to all the connected players
-          response = "AddPlayer:" + newPlayerID + "\n";
+          response = "AddPlayer:" + newPlayer + "\n";
           Send(keyValuePair.Value.workSocket, response);
 
           //Send the info of the players connected to the new player
-          response = "AddPlayer:" + keyValuePair.Key + "\n";
+          response = "AddPlayer:" + keyValuePair.Value.nick + "\n";
           Send(socket, response);
         }
       });
@@ -213,10 +235,14 @@ public static class Server {
     private static void DisconnectPlayer (Socket socket) {
       int key = 0;
       StateObject state;
+      string response = "";
       Parallel.ForEach(connectedList, keyValuePair => {
         if (keyValuePair.Value.workSocket == socket) {
           key = keyValuePair.Key;
           state = keyValuePair.Value;
+        } else {
+          response = "RemovePlayer:" + keyValuePair.Value.nick + "\n";
+          Send(keyValuePair.Value.workSocket, response);
         }
       });
       connectedList.TryRemove(key, out state);
