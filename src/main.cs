@@ -19,13 +19,14 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
 
 public static class Server {
   //Size of receive buffer.
   public const int kBufferSize = 1024;
 
-  //The list of connected users
-  public static ConcurrentDictionary<int, StateObject> connectedList = new ConcurrentDictionary<int, StateObject>();
+  //The max amount of players on the same group
+  public const int kMaxPlayers = 4;
 
   public class StateObject {
     //Receive buffer.
@@ -36,6 +37,20 @@ public static class Server {
 
     public string nick = "";
   }
+
+  //Group of players
+  /*public class Group {
+    public List<StateObject> players;
+  }*/
+
+  //The list of users connected to the server (But not necessary logged into an account)
+  public static ConcurrentDictionary<int, StateObject> connectedList = new ConcurrentDictionary<int, StateObject>();
+
+  //The list of users loged into the server
+  public static ConcurrentDictionary<int, StateObject> logedList = new ConcurrentDictionary<int, StateObject>();
+
+  //The list of groups of players playing together
+  //public static List<Group> groups;
 
   public class DB {
     //Holds our connection with the database
@@ -111,7 +126,7 @@ public static class Server {
               keyValuePair.Value.nick = nick;
             }
           });
-          Task.Run(() => ConnectNewPlayer(socket, nick));
+          Task.Run(() => Login(socket, nick));
         }
       }
       return response;
@@ -181,6 +196,15 @@ public static class Server {
             }
             Send(handler, response);
             break;
+          case "Logout":
+            if (data.Length == 1) {
+              Logout(handler);
+            } else {
+              response = "ERROR";
+              Console.WriteLine("ERROR: Logout: [{0}]", content);
+              Send(handler, response);
+            }
+            break;
           case "Create":
             if (data.Length == 4) {
               response = ProcessCreateAccount(data[1], data[2], data[3]);
@@ -217,9 +241,54 @@ public static class Server {
       }
     }
 
-    private static void ConnectNewPlayer (Socket socket, string newPlayer) {
+    /*private static void EnterGroup (StateObject stateObject) {
+      //If there isn't a group of players or the last group of players is full create a new group
+      if (groups.Count == 0 || groups.ElementAt(groups.Count - 1).players.Count >= kMaxPlayers) {
+        groups.Add(new Group());
+      }
+
+      groups.ElementAt(groups.Count - 1).players.Add(stateObject);
+    }*/
+
+    /*private static void ExitGroup (StateObject stateObject) {
+      for (int i = 0; i < groups.Count; ++i) {
+        for (int j = 0; j < kMaxPlayers; ++j) {
+          if (groups.ElementAt(i).players.ElementAt(j) == stateObject) {
+            //Remove the player from this group
+            groups.ElementAt(i).players.RemoveAt(j);
+
+            // Tell the others this player is going to exit the group
+            for (int k = 0; k < kMaxPlayers; ++k) {
+
+            }
+          }
+        }
+      }
+    }*/
+
+    private static void Login (Socket socket, string newPlayer) {
       string response = "";
+
+      //If the player is already loged it should logout
+      Parallel.ForEach(logedList, keyValuePair => {
+        if (keyValuePair.Value.nick == newPlayer) {
+          StateObject state;
+          response = "Logout\n";
+          Send(keyValuePair.Value.workSocket, response);
+          Thread.Sleep(100);
+          logedList.TryRemove(keyValuePair.Key, out state);
+        }
+      });
+
+      //Add the player to the loged list
       Parallel.ForEach(connectedList, keyValuePair => {
+        if (keyValuePair.Value.workSocket == socket) {
+          logedList.TryAdd(keyValuePair.Key, keyValuePair.Value);
+        }
+      });
+
+      //Inform the other loged player
+      Parallel.ForEach(logedList, keyValuePair => {
         if (keyValuePair.Value.workSocket != socket) {
           //Send the info of the new player to all the connected players
           response = "AddPlayer:" + newPlayer + "\n";
@@ -232,20 +301,32 @@ public static class Server {
       });
     }
 
-    private static void DisconnectPlayer (Socket socket) {
-      int key = 0;
-      StateObject state;
-      string response = "";
-      Parallel.ForEach(connectedList, keyValuePair => {
+    private static void Logout (Socket socket) {
+      Parallel.ForEach(logedList, keyValuePair => {
         if (keyValuePair.Value.workSocket == socket) {
-          key = keyValuePair.Key;
-          state = keyValuePair.Value;
-        } else {
-          response = "RemovePlayer:" + keyValuePair.Value.nick + "\n";
-          Send(keyValuePair.Value.workSocket, response);
+          StateObject state;
+          logedList.TryRemove(keyValuePair.Key, out state);
+          //ExitGroup(keyValuePair.Value);
         }
       });
-      connectedList.TryRemove(key, out state);
+    }
+
+    private static void DisconnectPlayer (Socket socket) {
+      Logout(socket);
+      
+      string nick = "";
+      Parallel.ForEach(connectedList, keyValuePair => {
+        if (keyValuePair.Value.workSocket == socket) {
+          StateObject state = keyValuePair.Value;
+          nick = keyValuePair.Value.nick;
+          connectedList.TryRemove(keyValuePair.Key, out state);
+        }
+      });
+
+      Parallel.ForEach(connectedList, keyValuePair => {
+        string response = "RemovePlayer:" + nick + "\n";
+        Send(keyValuePair.Value.workSocket, response);
+      });
     }
 
     private static void SendCallback (IAsyncResult ar) {
@@ -263,7 +344,7 @@ public static class Server {
         //Console.WriteLine(e.ToString());
         e.ToString();
         Console.WriteLine("ERROR1: Lost connection with: {0}", state.workSocket.RemoteEndPoint.ToString());
-        DisconnectPlayer(handler);
+        DisconnectPlayer(state.workSocket);
       }
     }
 
@@ -272,9 +353,16 @@ public static class Server {
       byte[] byteData = Encoding.ASCII.GetBytes(data);
 
       //Begin sending the data to the remote device.
-      Console.WriteLine("[Server]: {0}", data);
+      Console.WriteLine("[Server]-[{0}]: {1}", handler.RemoteEndPoint.ToString(), data);
       Thread.Sleep(100);
-      handler.BeginSend(byteData, 0, byteData.Length, 0, new AsyncCallback(SendCallback), handler);
+      try {
+        handler.BeginSend(byteData, 0, byteData.Length, 0, new AsyncCallback(SendCallback), handler);
+      } catch (Exception e) {
+        //Console.WriteLine(e.ToString());
+        e.ToString();
+        Console.WriteLine("ERROR2: Lost connection with: {0}", handler.RemoteEndPoint.ToString());
+        DisconnectPlayer(handler);
+      }
     }
 
     private static void ReadCallback (IAsyncResult ar) {
@@ -297,7 +385,7 @@ public static class Server {
       } catch (Exception e) {
         //Console.WriteLine(e.ToString());
         e.ToString();
-        Console.WriteLine("ERROR2: Lost connection with: {0}", state.workSocket.RemoteEndPoint.ToString());
+        Console.WriteLine("ERROR3: Lost connection with: {0}", state.workSocket.RemoteEndPoint.ToString());
         DisconnectPlayer(handler);
       }
     }
