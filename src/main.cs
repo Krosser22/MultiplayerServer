@@ -172,72 +172,52 @@ public static class Server {
 
     private static void ProcessChatNewLine (string nick, string newLine) {
       string response = "";
-      Parallel.ForEach(connectedList, keyValuePair => {
+      Parallel.ForEach(logedList, keyValuePair => {
         response = "Chat:" + nick + ":" + newLine + "\n";
         Send(keyValuePair.Value.workSocket, response);
       });
     }
 
+    private static void ProcessHit (string nick, string ownerID, string bulletID, string damage) {
+      string response = "";
+      Parallel.ForEach(logedList, keyValuePair => {
+        response = "Hit:" + nick + ":" + ownerID + ":" + bulletID + ":" + damage + "\n";
+        Send(keyValuePair.Value.workSocket, response);
+      });
+    }
     private static void ProcessTCPMsg (Socket handler, string content) {
       string response = "";
       string[] data = content.Split(':');
-      if (data.Length <= 0) {
-        response = "ERROR:BAD FORMAT";
-        Console.WriteLine("ERROR: BAD FORMAT: [{0}]", content);
-        Send(handler, response);
-      } else {
+
+      try {
         switch (data[0]) {
           case "Login":
-            if (data.Length == 3) {
-              response = ProcessLogin(data[1], data[2], handler);
-            } else {
-              response = "ERROR";
-              Console.WriteLine("ERROR: Login: [{0}]", content);
-            }
+            response = ProcessLogin(data[1], data[2], handler);
             Send(handler, response);
             break;
           case "Logout":
-            if (data.Length == 1) {
-              Logout(handler);
-            } else {
-              response = "ERROR";
-              Console.WriteLine("ERROR: Logout: [{0}]", content);
-              Send(handler, response);
-            }
+            Logout(handler);
             break;
           case "Create":
-            if (data.Length == 4) {
-              response = ProcessCreateAccount(data[1], data[2], data[3]);
-            } else {
-              response = "ERROR";
-              Console.WriteLine("ERROR: Create: [{0}]", content);
-            }
+            response = ProcessCreateAccount(data[1], data[2], data[3]);
             Send(handler, response);
             break;
           case "Forgot":
-            if (data.Length == 2) {
-              response = ProcessForgotPassword(data[1]);
-            } else {
-              response = "ERROR";
-              Console.WriteLine("ERROR: Forgot: [{0}]", content);
-            }
+            response = ProcessForgotPassword(data[1]);
             Send(handler, response);
             break;
           case "Chat":
-            if (data.Length == 3) {
-              ProcessChatNewLine(data[1], data[2]);
-              response = "";
-            } else {
-              response = "ERROR";
-              Console.WriteLine("ERROR: Chat: [{0}]", content);
-            }
+            ProcessChatNewLine(data[1], data[2]);
+            break;
+          case "Hit":
+            ProcessHit(data[1], data[2], data[3], data[4]);
             break;
           default:
-            response = "ERROR COMMAND NOT FOUND";
             Console.WriteLine("ERROR: Command not found: [{0}]", content);
-            Send(handler, response);
             break;
         }
+      } catch (Exception ex) {
+        Console.WriteLine(ex.Message);
       }
     }
 
@@ -302,30 +282,30 @@ public static class Server {
     }
 
     private static void Logout (Socket socket) {
+      string nick = "";
       Parallel.ForEach(logedList, keyValuePair => {
         if (keyValuePair.Value.workSocket == socket) {
           StateObject state;
+          nick = keyValuePair.Value.nick;
           logedList.TryRemove(keyValuePair.Key, out state);
           //ExitGroup(keyValuePair.Value);
         }
+      });
+
+      Parallel.ForEach(logedList, keyValuePair => {
+        string response = "RemovePlayer:" + nick + "\n";
+        Send(keyValuePair.Value.workSocket, response);
       });
     }
 
     private static void DisconnectPlayer (Socket socket) {
       Logout(socket);
       
-      string nick = "";
       Parallel.ForEach(connectedList, keyValuePair => {
         if (keyValuePair.Value.workSocket == socket) {
-          StateObject state = keyValuePair.Value;
-          nick = keyValuePair.Value.nick;
+          StateObject state;
           connectedList.TryRemove(keyValuePair.Key, out state);
         }
-      });
-
-      Parallel.ForEach(connectedList, keyValuePair => {
-        string response = "RemovePlayer:" + nick + "\n";
-        Send(keyValuePair.Value.workSocket, response);
       });
     }
 
@@ -602,8 +582,18 @@ public static class Server {
     while (command != "exit") {
       command = Console.ReadLine();
       //if (command != "") Console.WriteLine("Command: {0}", command);
+      if (command == "loged") {
+        Console.WriteLine("Loged: {0}", logedList.Count);
+        Parallel.ForEach(logedList, keyValuePair => {
+          Console.WriteLine("Key: {0}\nNick: {1}\nSocket: {2}\n", keyValuePair.Key, keyValuePair.Value.nick, keyValuePair.Value.workSocket.RemoteEndPoint.ToString());
+        });
+      } else if (command == "conected") {
+        Console.WriteLine("Conected: {0}", connectedList.Count);
+        Parallel.ForEach(connectedList, keyValuePair => {
+          Console.WriteLine("Key: {0}\nSocket: {1}\n", keyValuePair.Key, keyValuePair.Value.workSocket.RemoteEndPoint.ToString());
+        });
+      }
     }
-
     return 0;
   }
 }
