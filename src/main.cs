@@ -25,9 +25,6 @@ public static class Server {
   //Size of receive buffer.
   public const int kBufferSize = 1024;
 
-  //The max amount of players on the same group
-  public const int kMaxPlayers = 4;
-
   public class StateObject {
     //Receive buffer.
     public byte[] buffer = new byte[kBufferSize];
@@ -39,9 +36,15 @@ public static class Server {
   }
 
   //Group of players
-  /*public class Group {
+  public class Group {
+    public Group() {
+      players = new List<StateObject>();
+    }
     public List<StateObject> players;
-  }*/
+
+    //The max amount of players on the same group
+    public const int kMaxPlayers = 3;
+  }
 
   //The list of users connected to the server (But not necessary logged into an account)
   public static ConcurrentDictionary<int, StateObject> connectedList = new ConcurrentDictionary<int, StateObject>();
@@ -50,7 +53,7 @@ public static class Server {
   public static ConcurrentDictionary<int, StateObject> logedList = new ConcurrentDictionary<int, StateObject>();
 
   //The list of groups of players playing together
-  //public static List<Group> groups;
+  public static List<Group> groups = new List<Group>();
 
   public class DB {
     //Holds our connection with the database
@@ -180,11 +183,20 @@ public static class Server {
 
     private static void ProcessHit (string nick, string ownerID, string bulletID, string damage) {
       string response = "";
-      Parallel.ForEach(logedList, keyValuePair => {
-        response = "Hit:" + nick + ":" + ownerID + ":" + bulletID + ":" + damage + "\n";
-        Send(keyValuePair.Value.workSocket, response);
-      });
+      bool found = false;
+      for (int i = groups.Count - 1; i >= 0 && !found; --i) { //From the top to the bottom
+        for (int j = 0; j < groups.ElementAt(i).players.Count && !found; ++j) {
+          if (groups.ElementAt(i).players.ElementAt(j).nick == nick) {
+            found = true;
+            for (int k = 0; k < groups.ElementAt(i).players.Count; ++k) {
+              response = "Hit:" + nick + ":" + ownerID + ":" + bulletID + ":" + damage + "\n";
+              Send(groups.ElementAt(i).players.ElementAt(k).workSocket, response);
+            }
+          }
+        }
+      }
     }
+
     private static void ProcessTCPMsg (Socket handler, string content) {
       string response = "";
       string[] data = content.Split(':');
@@ -221,30 +233,52 @@ public static class Server {
       }
     }
 
-    /*private static void EnterGroup (StateObject stateObject) {
+    private static void EnterGroup (StateObject stateObject) {
       //If there isn't a group of players or the last group of players is full create a new group
-      if (groups.Count == 0 || groups.ElementAt(groups.Count - 1).players.Count >= kMaxPlayers) {
+      if (groups.Count == 0) {
+        groups.Add(new Group());
+      } else if(groups.ElementAt(groups.Count - 1).players.Count >= Group.kMaxPlayers) {
         groups.Add(new Group());
       }
 
       groups.ElementAt(groups.Count - 1).players.Add(stateObject);
-    }*/
+      
+      for(int i = 0; i < groups.ElementAt(groups.Count - 1).players.Count; ++i) {
+        //Send to all members of the group who is the host
+        string msg = "Host:";
+        msg += groups.ElementAt(groups.Count - 1).players.ElementAt(0).nick + "\n";
+        Send(stateObject.workSocket, msg);
 
-    /*private static void ExitGroup (StateObject stateObject) {
+        //Inform the other loged player
+        if (groups.ElementAt(groups.Count - 1).players.ElementAt(i).nick != stateObject.nick) {
+          //Send the info of the new player to all the connected players
+          msg = "AddPlayer:" + stateObject.nick + "\n";
+          Send(groups.ElementAt(groups.Count - 1).players.ElementAt(i).workSocket, msg);
+
+          //Send the info of the players connected to the new player
+          msg = "AddPlayer:" + groups.ElementAt(groups.Count - 1).players.ElementAt(i).nick + "\n";
+          Send(stateObject.workSocket, msg);
+        }
+      }
+    }
+
+    private static void ExitGroup (StateObject stateObject) {
+      string response = "";
       for (int i = 0; i < groups.Count; ++i) {
-        for (int j = 0; j < kMaxPlayers; ++j) {
-          if (groups.ElementAt(i).players.ElementAt(j) == stateObject) {
+        for (int j = 0; j < groups.ElementAt(i).players.Count; ++j) {
+          if (groups.ElementAt(i).players.ElementAt(j).nick == stateObject.nick) {
             //Remove the player from this group
             groups.ElementAt(i).players.RemoveAt(j);
 
             // Tell the others this player is going to exit the group
-            for (int k = 0; k < kMaxPlayers; ++k) {
-
+            for (int k = 0; k < groups.ElementAt(i).players.Count; ++k) {
+              response = "RemovePlayer:" + stateObject.nick + "\n";
+              Send(groups.ElementAt(i).players.ElementAt(k).workSocket, response);
             }
           }
         }
       }
-    }*/
+    }
 
     private static void Login (Socket socket, string newPlayer) {
       string response = "";
@@ -257,6 +291,7 @@ public static class Server {
           Send(keyValuePair.Value.workSocket, response);
           Thread.Sleep(100);
           logedList.TryRemove(keyValuePair.Key, out state);
+          ExitGroup(keyValuePair.Value);
         }
       });
 
@@ -264,19 +299,7 @@ public static class Server {
       Parallel.ForEach(connectedList, keyValuePair => {
         if (keyValuePair.Value.workSocket == socket) {
           logedList.TryAdd(keyValuePair.Key, keyValuePair.Value);
-        }
-      });
-
-      //Inform the other loged player
-      Parallel.ForEach(logedList, keyValuePair => {
-        if (keyValuePair.Value.workSocket != socket) {
-          //Send the info of the new player to all the connected players
-          response = "AddPlayer:" + newPlayer + "\n";
-          Send(keyValuePair.Value.workSocket, response);
-
-          //Send the info of the players connected to the new player
-          response = "AddPlayer:" + keyValuePair.Value.nick + "\n";
-          Send(socket, response);
+          EnterGroup(keyValuePair.Value);
         }
       });
     }
@@ -288,13 +311,8 @@ public static class Server {
           StateObject state;
           nick = keyValuePair.Value.nick;
           logedList.TryRemove(keyValuePair.Key, out state);
-          //ExitGroup(keyValuePair.Value);
+          ExitGroup(keyValuePair.Value);
         }
-      });
-
-      Parallel.ForEach(logedList, keyValuePair => {
-        string response = "RemovePlayer:" + nick + "\n";
-        Send(keyValuePair.Value.workSocket, response);
       });
     }
 
@@ -582,16 +600,34 @@ public static class Server {
     while (command != "exit") {
       command = Console.ReadLine();
       //if (command != "") Console.WriteLine("Command: {0}", command);
-      if (command == "loged") {
-        Console.WriteLine("Loged: {0}", logedList.Count);
-        Parallel.ForEach(logedList, keyValuePair => {
-          Console.WriteLine("Key: {0}\nNick: {1}\nSocket: {2}\n", keyValuePair.Key, keyValuePair.Value.nick, keyValuePair.Value.workSocket.RemoteEndPoint.ToString());
-        });
-      } else if (command == "conected") {
-        Console.WriteLine("Conected: {0}", connectedList.Count);
-        Parallel.ForEach(connectedList, keyValuePair => {
-          Console.WriteLine("Key: {0}\nSocket: {1}\n", keyValuePair.Key, keyValuePair.Value.workSocket.RemoteEndPoint.ToString());
-        });
+      switch (command) {
+        case "loged":
+          Console.WriteLine();
+          Console.WriteLine("-Loged: [{0}]-\n", logedList.Count);
+          Parallel.ForEach(logedList, keyValuePair => {
+            Console.WriteLine("Key: {0}\nNick: {1}\nSocket: {2}\n", keyValuePair.Key, keyValuePair.Value.nick, keyValuePair.Value.workSocket.RemoteEndPoint.ToString());
+          });
+          break;
+        case "conected":
+          Console.WriteLine();
+          Console.WriteLine("-Conected: [{0}]-\n", connectedList.Count);
+          Parallel.ForEach(connectedList, keyValuePair => {
+            Console.WriteLine("Key: {0}\nSocket: {1}\n", keyValuePair.Key, keyValuePair.Value.workSocket.RemoteEndPoint.ToString());
+          });
+          break;
+        case "groups":
+          Console.WriteLine();
+          Console.WriteLine("-Groups: [{0}]-\n", groups.Count);
+          for (int i = 0; i < groups.Count; ++i) {
+            Console.WriteLine("Group {0}:", i);
+            for (int j = 0; j < groups.ElementAt(i).players.Count; ++j) {
+              Console.WriteLine("Nick: {0}\nSocket: {1}\n", groups.ElementAt(i).players.ElementAt(j).nick, groups.ElementAt(i).players.ElementAt(j).workSocket.RemoteEndPoint.ToString());
+            }
+            Console.WriteLine();
+          }
+          break;
+        default:
+          break;
       }
     }
     return 0;
