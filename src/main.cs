@@ -43,7 +43,7 @@ public static class Server {
     public List<StateObject> players;
 
     //The max amount of players on the same group
-    public const int kMaxPlayers = 3;
+    public const int kMaxPlayers = 2;
   }
 
   //The list of users connected to the server (But not necessary logged into an account)
@@ -74,9 +74,10 @@ public static class Server {
       SQLiteCommand command = new SQLiteCommand(sql, Connection);
       command.ExecuteNonQuery();
 
-      /*sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('Krosser22@random.com', 'Krosser22', 'a123456*')";
-      command = new SQLiteCommand(sql, dbConnection);
-      command.ExecuteNonQuery();*/
+      //Creates the Ranking table
+      sql = "CREATE TABLE Ranking (Nick TEXT UNIQUE, Points INTEGER);";
+      command = new SQLiteCommand(sql, Connection);
+      command.ExecuteNonQuery();
     }
 
     public static void DBMain () {
@@ -137,22 +138,25 @@ public static class Server {
 
     private static string ProcessCreateAccount (string email, string nick, string password) {
       string response = "Create:ERROR\n";
-      //string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Email = '" + email + "' OR Nick = '" + nick + "')";
-      string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Email = @email OR Nick = @nick)";
-      SQLiteCommand command = new SQLiteCommand(sql, DB.Connection);
-      command.Parameters.AddWithValue("@email", email);
-      command.Parameters.AddWithValue("@nick", nick);
-      SQLiteDataReader reader = command.ExecuteReader();
-      if (reader.Read()) {
-        if (!reader.GetBoolean(0)) {
-          //sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('" + email + "', '" + nick + "', '" + password + "')";
-          sql = "INSERT INTO Users (Email, Nick, Password) VALUES (@email, @nick, @password)";
-          command = new SQLiteCommand(sql, DB.Connection);
-          command.Parameters.AddWithValue("@email", email);
-          command.Parameters.AddWithValue("@nick", nick);
-          command.Parameters.AddWithValue("@password", password);
-          command.ExecuteNonQuery();
-          response = "Create:Done\n";
+
+      if (email != "" && email.IndexOf(':') < 0 && nick != "" && nick.IndexOf(':') < 0 && password != "" && password.IndexOf(':') <0) {
+        //string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Email = '" + email + "' OR Nick = '" + nick + "')";
+        string sql = "SELECT EXISTS (SELECT * FROM Users WHERE Email = @email OR Nick = @nick)";
+        SQLiteCommand command = new SQLiteCommand(sql, DB.Connection);
+        command.Parameters.AddWithValue("@email", email);
+        command.Parameters.AddWithValue("@nick", nick);
+        SQLiteDataReader reader = command.ExecuteReader();
+        if (reader.Read()) {
+          if (!reader.GetBoolean(0)) {
+            //sql = "INSERT INTO Users (Email, Nick, Password) VALUES ('" + email + "', '" + nick + "', '" + password + "')";
+            sql = "INSERT INTO Users (Email, Nick, Password) VALUES (@email, @nick, @password)";
+            command = new SQLiteCommand(sql, DB.Connection);
+            command.Parameters.AddWithValue("@email", email);
+            command.Parameters.AddWithValue("@nick", nick);
+            command.Parameters.AddWithValue("@password", password);
+            command.ExecuteNonQuery();
+            response = "Create:Done\n";
+          }
         }
       }
       return response;
@@ -197,6 +201,59 @@ public static class Server {
       }
     }
 
+    private static void ProcessRanking (Socket socket) {
+      string response = "Ranking:";
+
+      string sql = "SELECT * FROM Ranking ORDER BY Points DESC";
+      SQLiteCommand command = new SQLiteCommand(sql, DB.Connection);
+      SQLiteDataReader reader = command.ExecuteReader();
+      string points = "";
+      string nicks = "";
+
+      for (int i = 0; i < 6 && reader.Read(); ++i) {
+        points += reader["points"] + "-";
+        nicks += reader["nick"] + "-";
+      }
+      response += points + ":" + nicks + "\n";
+      Send(socket, response);
+    }
+
+    private static void ProcessPoint (string nick) {
+      string sql = "SELECT * FROM Ranking WHERE Nick = @nick";
+      SQLiteCommand command = new SQLiteCommand(sql, DB.Connection);
+      command.Parameters.AddWithValue("@nick", nick);
+      SQLiteDataReader reader = command.ExecuteReader();
+      if (!reader.Read()) {
+        sql = "INSERT INTO Ranking (Nick, Points) VALUES (@nick, 1)";
+        command = new SQLiteCommand(sql, DB.Connection);
+        command.Parameters.AddWithValue("@nick", nick);
+        command.ExecuteNonQuery();
+      } else {
+        int newPoints = int.Parse(reader["points"].ToString()) + 1;
+        sql = "UPDATE Ranking SET Points ='" + newPoints + "' WHERE Nick = @nick";
+        command = new SQLiteCommand(sql, DB.Connection);
+        command.Parameters.AddWithValue("@nick", nick);
+        command.ExecuteNonQuery();
+      }
+    }
+
+    private static void ProcessNewGame(Socket socket) {
+      bool found = false;
+      for (int i = groups.Count - 1; i >= 0 && !found; --i) { //From the top to the bottom
+        for (int j = 0; j < groups.ElementAt(i).players.Count && !found; ++j) {
+          if (groups.ElementAt(i).players.ElementAt(j).workSocket == socket) {
+            found = true;
+            for (int k = groups.ElementAt(i).players.Count - 1; k >= 1; --k) {
+              StateObject stateObject = groups.ElementAt(i).players.ElementAt(k);
+              ExitGroup(stateObject);
+              EnterGroup(stateObject);
+              //Thread.Sleep(100);
+            }
+          }
+        }
+      }
+    }
+
     private static void ProcessTCPMsg (Socket handler, string content) {
       string response = "";
       string[] data = content.Split(':');
@@ -224,6 +281,15 @@ public static class Server {
           case "Hit":
             ProcessHit(data[1], data[2], data[3], data[4]);
             break;
+          case "Ranking":
+            ProcessRanking(handler);
+            break;
+          case "Point":
+            ProcessPoint(data[1]);
+            break;
+          case "NewGame":
+            ProcessNewGame(handler);
+            break;
           default:
             Console.WriteLine("ERROR: Command not found: [{0}]", content);
             break;
@@ -234,31 +300,47 @@ public static class Server {
     }
 
     private static void EnterGroup (StateObject stateObject) {
-      //If there isn't a group of players or the last group of players is full create a new group
-      if (groups.Count == 0) {
-        groups.Add(new Group());
-      } else if(groups.ElementAt(groups.Count - 1).players.Count >= Group.kMaxPlayers) {
-        groups.Add(new Group());
-      }
-
-      groups.ElementAt(groups.Count - 1).players.Add(stateObject);
-      
-      for(int i = 0; i < groups.ElementAt(groups.Count - 1).players.Count; ++i) {
-        //Send to all members of the group who is the host
-        string msg = "Host:";
-        msg += groups.ElementAt(groups.Count - 1).players.ElementAt(0).nick + "\n";
-        Send(stateObject.workSocket, msg);
-
-        //Inform the other loged player
-        if (groups.ElementAt(groups.Count - 1).players.ElementAt(i).nick != stateObject.nick) {
-          //Send the info of the new player to all the connected players
-          msg = "AddPlayer:" + stateObject.nick + "\n";
-          Send(groups.ElementAt(groups.Count - 1).players.ElementAt(i).workSocket, msg);
-
-          //Send the info of the players connected to the new player
-          msg = "AddPlayer:" + groups.ElementAt(groups.Count - 1).players.ElementAt(i).nick + "\n";
-          Send(stateObject.workSocket, msg);
+      try {
+        //If there isn't a group of players or the last group of players is full create a new group
+        if (groups.Count == 0) {
+          groups.Add(new Group());
+        } else if (groups.ElementAt(groups.Count - 1).players.Count >= Group.kMaxPlayers) {
+          groups.Add(new Group());
         }
+
+        groups.ElementAt(groups.Count - 1).players.Add(stateObject);
+
+        string msg = "Host:";
+        for (int i = 0; i < groups.ElementAt(groups.Count - 1).players.Count; ++i) {
+          //Send to all members of the group who is the host
+          msg = "Host:";
+          msg += groups.ElementAt(groups.Count - 1).players.ElementAt(0).nick + "\n";
+          Send(stateObject.workSocket, msg);
+
+          //Inform the other loged player
+          if (groups.ElementAt(groups.Count - 1).players.ElementAt(i).nick != stateObject.nick) {
+            //Send the info of the new player to all the connected players
+            msg = "AddPlayer:" + stateObject.nick + "\n";
+            Send(groups.ElementAt(groups.Count - 1).players.ElementAt(i).workSocket, msg);
+
+            //Send the info of the players connected to the new player
+            msg = "AddPlayer:" + groups.ElementAt(groups.Count - 1).players.ElementAt(i).nick + "\n";
+            Send(stateObject.workSocket, msg);
+          }
+        }
+
+        //If the group is full lets start the game
+        if (groups.ElementAt(groups.Count - 1).players.Count >= Group.kMaxPlayers) {
+          Thread.Sleep(100);
+          Random game = new Random();
+          msg = "StartGame:" + (int)(game.Next() % 4);
+          for (int j = 0; j < Group.kMaxPlayers; ++j) {
+            Send(groups.ElementAt(groups.Count - 1).players.ElementAt(j).workSocket, msg);
+          }
+        }
+      } catch (Exception ex) {
+        Console.WriteLine(ex.Message);
+        Console.Read();
       }
     }
 
@@ -274,6 +356,14 @@ public static class Server {
             for (int k = 0; k < groups.ElementAt(i).players.Count; ++k) {
               response = "RemovePlayer:" + stateObject.nick + "\n";
               Send(groups.ElementAt(i).players.ElementAt(k).workSocket, response);
+            }
+
+            //If it is the last player of a group take it out and move it to the next active group
+            if (groups.ElementAt(i).players.Count == 1) {
+              StateObject lastPlayerInGroup = groups.ElementAt(i).players.ElementAt(0);
+              groups.ElementAt(i).players.RemoveAt(0);
+              groups.RemoveAt(i);
+              EnterGroup(lastPlayerInGroup);
             }
           }
         }
@@ -309,9 +399,9 @@ public static class Server {
       Parallel.ForEach(logedList, keyValuePair => {
         if (keyValuePair.Value.workSocket == socket) {
           StateObject state;
+          ExitGroup(keyValuePair.Value);
           nick = keyValuePair.Value.nick;
           logedList.TryRemove(keyValuePair.Key, out state);
-          ExitGroup(keyValuePair.Value);
         }
       });
     }
